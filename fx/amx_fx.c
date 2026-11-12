@@ -857,6 +857,254 @@ static void rv_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
 static const char *const rv_cn[] = {"Enabled", "Size", "Damping", "Predelay", "Mix"};
 static const float rv_cr[][3] = {{0, 1, 0}, {0, 1, 0.6f}, {0, 1, 0.4f}, {0, 200, 20}, {0, 1, 0.3f}};
 
+/* ================================================================== EasyEffects-style modules */
+/* ---- shared: Linkwitz-Riley 3-band crossover (LR4, the low band is all-pass corrected) */
+typedef struct { bq_t l1[2], h1[2], l2[2], h2[2], ap; float f1, f2; } xo3_t;
+static void xo3_set(xo3_t *X, float sr, float f1, float f2) {
+    if (f2 < f1 * 1.5f) f2 = f1 * 1.5f;
+    if (X->f1 == f1 && X->f2 == f2) return;
+    X->f1 = f1; X->f2 = f2;
+    for (int i = 0; i < 2; i++) {
+        bq_set(&X->l1[i], BQ_LP, sr, f1, 0.7071f, 0); bq_set(&X->h1[i], BQ_HP, sr, f1, 0.7071f, 0);
+        bq_set(&X->l2[i], BQ_LP, sr, f2, 0.7071f, 0); bq_set(&X->h2[i], BQ_HP, sr, f2, 0.7071f, 0);
+    }
+    bq_set(&X->ap, BQ_AP, sr, f2, 0.7071f, 0);
+}
+static inline void xo3_run(xo3_t *X, int c, float x, float b[3]) {
+    float lo = bq_run(&X->l1[1], c, bq_run(&X->l1[0], c, x));
+    float r = bq_run(&X->h1[1], c, bq_run(&X->h1[0], c, x));
+    b[0] = bq_run(&X->ap, c, lo);
+    b[1] = bq_run(&X->l2[1], c, bq_run(&X->l2[0], c, r));
+    b[2] = bq_run(&X->h2[1], c, bq_run(&X->h2[0], c, r));
+}
+
+/* ---- auto gain: K-weighted loudness, slowly steered towards a target (silence is ignored) */
+typedef struct { bq_t kh, ks; float fast, slow, g; int primed; } agc_t;
+static void agc_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
+    agc_t *S = I->st;
+    bq_set(&S->kh, BQ_HP, I->sr, 38.f, 0.5f, 0);
+    bq_set(&S->ks, BQ_HIGHSHELF, I->sr, 1681.f, 0.7071f, 4.f);
+    float tgt = I->c[1], maxg = I->c[2], maxc = I->c[3], spd = fmaxf(0.2f, I->c[4]);
+    float kf = tc(400.f, I->sr), ks = tc(spd * 1000.f, I->sr), kg = tc(spd * 500.f, I->sr);
+    if (!S->primed) { S->slow = db2lin(tgt) * db2lin(tgt); S->g = 0; S->primed = 1; }
+    for (unsigned i = 0; i < n; i++) {
+        float ms = 0;
+        for (int c = 0; c < 2; c++) { float k = bq_run(&S->ks, c, bq_run(&S->kh, c, in[c][i])); ms += k * k; }
+        ms *= 0.5f;
+        S->fast = ms + (S->fast - ms) * kf;
+        if (S->fast > 1e-6f) S->slow = ms + (S->slow - ms) * ks;     /* gate: below ~-60 LUFS, hold */
+        float lvl = 10.f * log10f(S->slow + 1e-12f) - 0.691f;
+        float want = clampf(tgt - lvl, -maxc, maxg);
+        S->g = want + (S->g - want) * kg;
+        float g = db2lin(S->g);
+        out[0][i] = in[0][i] * g;
+        out[1][i] = in[1][i] * g;
+    }
+}
+static const char *const agc_cn[] = {"Enabled", "Target", "Max Gain", "Max Cut", "Speed"};
+static const float agc_cr[][3] = {{0, 1, 0}, {-36, -6, -18}, {0, 30, 12}, {0, 30, 12}, {0.5f, 20, 3}};
+
+/* ---- harmonic generators: bass enhancer and exciter */
+typedef struct { bq_t band[2], strip[2], dc; } harm_t;
+static inline float lo_sat(float x, float drv) { return x - tanhf(x * drv) / drv; }
+static void bassenh_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
+    harm_t *S = I->st;
+    float amt = I->c[1], f = I->c[2], drv = 1.f + I->c[3] * 3.f, fl = I->c[4];
+    for (int k = 0; k < 2; k++) { bq_set(&S->band[k], BQ_LP, I->sr, f, 0.7071f, 0);
+                                  bq_set(&S->strip[k], BQ_HP, I->sr, f, 0.7071f, 0); }
+    bq_set(&S->dc, BQ_HP, I->sr, 15.f, 0.7071f, 0);
+    for (unsigned i = 0; i < n; i++)
+        for (int c = 0; c < 2; c++) {
+            float lo = bq_run(&S->band[1], c, bq_run(&S->band[0], c, in[c][i]));
+            /* only what the saturation adds (odd + even harmonics), never the clean signal */
+            float h = lo_sat(lo, drv) + 0.5f * drv * lo * lo;
+            h = bq_run(&S->dc, c, h);
+            float gen = fl > 0.5f ? h : bq_run(&S->strip[1], c, bq_run(&S->strip[0], c, h));
+            out[c][i] = in[c][i] + gen * amt * 4.f;
+        }
+}
+static const char *const bassenh_cn[] = {"Enabled", "Amount", "Frequency", "Harmonics", "Include Fundamental"};
+static const float bassenh_cr[][3] = {{0, 1, 0}, {0, 1, 0.4f}, {40, 250, 100}, {0, 10, 5}, {0, 1, 0}};
+
+static void exciter_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
+    harm_t *S = I->st;
+    float amt = I->c[1], f = I->c[2], drv = 1.f + I->c[3] * 3.f;
+    for (int k = 0; k < 2; k++) { bq_set(&S->band[k], BQ_HP, I->sr, f, 0.7071f, 0);
+                                  bq_set(&S->strip[k], BQ_HP, I->sr, f, 0.7071f, 0); }
+    for (unsigned i = 0; i < n; i++)
+        for (int c = 0; c < 2; c++) {
+            float hi = bq_run(&S->band[1], c, bq_run(&S->band[0], c, in[c][i]));
+            float h = (lo_sat(hi, drv)) + 0.5f * drv * hi * hi;       /* odd + even harmonics only */
+            h = bq_run(&S->strip[1], c, bq_run(&S->strip[0], c, h));
+            out[c][i] = in[c][i] + h * amt * 4.f;
+        }
+}
+static const char *const exciter_cn[] = {"Enabled", "Amount", "Frequency", "Harmonics"};
+static const float exciter_cr[][3] = {{0, 1, 0}, {0, 1, 0.3f}, {1000, 12000, 4000}, {0, 10, 5}};
+
+/* ---- bass loudness: low + high shelves, like listening louder */
+typedef struct { bq_t lo, hi; } bloud_t;
+static void bloud_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
+    bloud_t *S = I->st;
+    float a = I->c[1];
+    bq_set(&S->lo, BQ_LOWSHELF, I->sr, I->c[2], 0.6f, a);
+    bq_set(&S->hi, BQ_HIGHSHELF, I->sr, 9000.f, 0.6f, a * I->c[3]);
+    float g = db2lin(I->c[4]);
+    for (unsigned i = 0; i < n; i++)
+        for (int c = 0; c < 2; c++) out[c][i] = bq_run(&S->hi, c, bq_run(&S->lo, c, in[c][i])) * g;
+}
+static const char *const bloud_cn[] = {"Enabled", "Amount", "Bass Frequency", "Treble", "Output"};
+static const float bloud_cr[][3] = {{0, 1, 0}, {0, 18, 6}, {40, 250, 100}, {0, 1, 0.35f}, {-24, 6, -3}};
+
+/* ---- crystalizer: emphasise sample-to-sample change (sharpens transients) */
+typedef struct { float prev[2]; } cryst_t;
+static void cryst_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
+    cryst_t *S = I->st;
+    float k = I->c[1], g = db2lin(I->c[2]);
+    for (unsigned i = 0; i < n; i++)
+        for (int c = 0; c < 2; c++) {
+            float x = in[c][i];
+            out[c][i] = (x + k * (x - S->prev[c])) * g;
+            S->prev[c] = x;
+        }
+}
+static const char *const cryst_cn[] = {"Enabled", "Intensity", "Output"};
+static const float cryst_cr[][3] = {{0, 1, 0}, {0, 10, 2}, {-24, 6, -3}};
+
+/* ---- downward expander */
+typedef struct { float env, gr; } expd_t;
+static void expd_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
+    expd_t *S = I->st;
+    float thr = I->c[1], ratio = fmaxf(1.f, I->c[2]), maxr = I->c[3];
+    float at = tc(I->c[4], I->sr), rt = tc(I->c[5], I->sr), er = tc(20.f, I->sr);
+    for (unsigned i = 0; i < n; i++) {
+        float pk = fmaxf(fabsf(in[0][i]), fabsf(in[1][i]));
+        S->env = pk > S->env ? pk : pk + (S->env - pk) * er;
+        float d = thr - lin2db(S->env);
+        float want = d > 0 ? fminf(d * (ratio - 1.f), maxr) : 0.f;
+        S->gr = want + (S->gr - want) * (want > S->gr ? rt : at);   /* reducing = closing = release */
+        float g = db2lin(-S->gr);
+        out[0][i] = in[0][i] * g;
+        out[1][i] = in[1][i] * g;
+    }
+}
+static const char *const expd_cn[] = {"Enabled", "Threshold", "Ratio", "Max Reduction", "Attack", "Release"};
+static const float expd_cr[][3] = {{0, 1, 0}, {-80, 0, -40}, {1, 10, 2}, {0, 90, 40}, {0.1f, 100, 5}, {10, 2000, 200}};
+
+/* ---- filter: low / high / band pass, notch, 12-48 dB per octave */
+typedef struct { bq_t b[4]; } filt_t;
+static const int filt_map[] = {BQ_LP, BQ_HP, BQ_BP, BQ_NOTCH};
+static void filt_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
+    filt_t *S = I->st;
+    int t = (int)clampf(I->c[1], 0, 3), st = 1 << (int)clampf(I->c[4], 0, 2);
+    for (int k = 0; k < st; k++) bq_set(&S->b[k], filt_map[t], I->sr, I->c[2], (t >= 2 || k == st - 1) ? I->c[3] : 0.7071f, 0);
+    for (unsigned i = 0; i < n; i++)
+        for (int c = 0; c < 2; c++) {
+            float x = in[c][i];
+            for (int k = 0; k < st; k++) x = bq_run(&S->b[k], c, x);
+            out[c][i] = x;
+        }
+}
+static const char *const filt_cn[] = {"Enabled", "Type", "Frequency", "Resonance", "Slope"};
+static const float filt_cr[][3] = {{0, 1, 0}, {0, 3, 0}, {20, 20000, 1000}, {0.1f, 10, 0.7071f}, {0, 2, 0}};
+
+/* ---- maximizer: push the level into a lookahead limiter */
+static void maxi_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
+    /* reuse the limiter: its controls are [Enabled, Ceiling, Release]; ours [Enabled, Threshold, Ceiling, Release] */
+    float save[3] = {I->c[1], I->c[2], I->c[3]}, g = db2lin(-I->c[1]);
+    static __thread float pre[2][CHUNK];
+    for (unsigned i = 0; i < n; i++) { pre[0][i] = in[0][i] * g; pre[1][i] = in[1][i] * g; }
+    I->c[1] = save[1]; I->c[2] = save[2];
+    float *const p[2] = {pre[0], pre[1]};
+    lim_run(I, p, out, n);
+    I->c[1] = save[0]; I->c[2] = save[1]; I->c[3] = save[2];
+}
+static const char *const maxi_cn[] = {"Enabled", "Threshold", "Ceiling", "Release"};
+static const float maxi_cr[][3] = {{0, 1, 0}, {-30, 0, -6}, {-12, 0, -0.5f}, {1, 1000, 60}};
+
+/* ---- multiband compressor (3 bands) */
+typedef struct { xo3_t x; float gr[3]; } mbc_t;
+static void mbc_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
+    mbc_t *S = I->st;
+    xo3_set(&S->x, I->sr, I->c[1], I->c[2]);
+    float at = tc(I->c[9], I->sr), rt = tc(I->c[10], I->sr), mk = db2lin(I->c[11]), g[3];
+    for (unsigned i = 0; i < n; i++) {
+        float b[2][3];
+        xo3_run(&S->x, 0, in[0][i], b[0]);
+        xo3_run(&S->x, 1, in[1][i], b[1]);
+        for (int k = 0; k < 3; k++) {
+            float thr = I->c[3 + 2 * k], ratio = fmaxf(1.f, I->c[4 + 2 * k]);
+            float d = lin2db(fmaxf(fabsf(b[0][k]), fabsf(b[1][k]))) - thr;
+            float want = d > 0 ? d * (1.f - 1.f / ratio) : 0.f;
+            S->gr[k] = want + (S->gr[k] - want) * (want > S->gr[k] ? at : rt);
+            g[k] = db2lin(-S->gr[k]);
+        }
+        for (int c = 0; c < 2; c++) out[c][i] = (b[c][0] * g[0] + b[c][1] * g[1] + b[c][2] * g[2]) * mk;
+    }
+}
+static const char *const mbc_cn[] = {"Enabled", "Low Crossover", "High Crossover", "Low Threshold", "Low Ratio",
+                                     "Mid Threshold", "Mid Ratio", "High Threshold", "High Ratio", "Attack", "Release", "Makeup"};
+static const float mbc_cr[][3] = {{0, 1, 0}, {40, 1000, 200}, {1000, 12000, 3000}, {-60, 0, -24}, {1, 20, 3},
+                                  {-60, 0, -24}, {1, 20, 3}, {-60, 0, -24}, {1, 20, 3}, {0.1f, 200, 10}, {10, 2000, 150}, {-12, 24, 0}};
+
+/* ---- multiband gate (3 bands) */
+typedef struct { xo3_t x; float env[3], g[3]; int hold[3]; } mbg_t;
+static void mbg_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
+    mbg_t *S = I->st;
+    xo3_set(&S->x, I->sr, I->c[1], I->c[2]);
+    float range = db2lin(I->c[6]), at = tc(I->c[7], I->sr), rt = tc(I->c[9], I->sr), er = tc(10.f, I->sr);
+    int hold = (int)(I->c[8] * 0.001f * I->sr);
+    for (unsigned i = 0; i < n; i++) {
+        float b[2][3];
+        xo3_run(&S->x, 0, in[0][i], b[0]);
+        xo3_run(&S->x, 1, in[1][i], b[1]);
+        for (int k = 0; k < 3; k++) {
+            float pk = fmaxf(fabsf(b[0][k]), fabsf(b[1][k]));
+            S->env[k] = pk > S->env[k] ? pk : pk + (S->env[k] - pk) * er;
+            if (S->env[k] > db2lin(I->c[3 + k])) S->hold[k] = hold;
+            float want = S->hold[k] > 0 ? 1.f : range;
+            if (S->hold[k] > 0) S->hold[k]--;
+            S->g[k] = want + (S->g[k] - want) * (want > S->g[k] ? at : rt);
+        }
+        for (int c = 0; c < 2; c++) out[c][i] = b[c][0] * S->g[0] + b[c][1] * S->g[1] + b[c][2] * S->g[2];
+    }
+}
+static const char *const mbg_cn[] = {"Enabled", "Low Crossover", "High Crossover", "Low Threshold", "Mid Threshold",
+                                     "High Threshold", "Range", "Attack", "Hold", "Release"};
+static const float mbg_cr[][3] = {{0, 1, 0}, {40, 1000, 200}, {1000, 12000, 3000}, {-90, 0, -50}, {-90, 0, -50},
+                                  {-90, 0, -50}, {-90, 0, -40}, {0.1f, 100, 2}, {0, 1000, 100}, {5, 2000, 150}};
+
+/* ---- stereo tools */
+typedef struct { int dummy; } stt_t;
+static void stt_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
+    float bal = I->c[1], width = I->c[2], gl = bal > 0 ? 1.f - bal : 1.f, gr = bal < 0 ? 1.f + bal : 1.f;
+    int mono = I->c[3] > 0.5f, swap = I->c[4] > 0.5f;
+    float il = I->c[5] > 0.5f ? -1.f : 1.f, ir = I->c[6] > 0.5f ? -1.f : 1.f;
+    for (unsigned i = 0; i < n; i++) {
+        float l = in[swap][i] * il, r = in[!swap][i] * ir;
+        float m = (l + r) * 0.5f, s = mono ? 0.f : (l - r) * 0.5f * width;
+        out[0][i] = (m + s) * gl;
+        out[1][i] = (m - s) * gr;
+    }
+}
+static const char *const stt_cn[] = {"Enabled", "Balance", "Width", "Mono", "Swap", "Invert L", "Invert R"};
+static const float stt_cr[][3] = {{0, 1, 0}, {-1, 1, 0}, {0, 2, 1}, {0, 1, 0}, {0, 1, 0}, {0, 1, 0}, {0, 1, 0}};
+
+/* ---- crossfeed (bs2b style): low-passed opposite channel, flat for mono content */
+typedef struct { float lp[2]; bq_t hs; } xf_t;
+static void xf_run(inst_t *I, float *const in[2], float *out[2], unsigned n) {
+    xf_t *S = I->st;
+    float g = db2lin(-I->c[2]), a = expf(-2.f * (float)M_PI * I->c[1] / I->sr), norm = 1.f / (1.f + g);
+    bq_set(&S->hs, BQ_HIGHSHELF, I->sr, I->c[1], 0.5f, lin2db(1.f + g));
+    for (unsigned i = 0; i < n; i++) {
+        float x[2] = {in[0][i], in[1][i]};
+        for (int c = 0; c < 2; c++) S->lp[c] = x[c] * (1.f - a) + S->lp[c] * a;
+        for (int c = 0; c < 2; c++) out[c][i] = (bq_run(&S->hs, c, x[c]) + g * S->lp[!c]) * norm;
+    }
+}
+static const char *const xf_cn[] = {"Enabled", "Cutoff", "Feed"};
+static const float xf_cr[][3] = {{0, 1, 0}, {300, 2000, 700}, {1, 15, 4.5f}};
+
 /* ================================================================== registry */
 #define FX(lbl, nm, pfx, st, ini, fin) \
     {lbl, nm, (int)(sizeof pfx##_cn / sizeof *pfx##_cn), pfx##_cn, pfx##_cr, sizeof(st), ini, pfx##_run, fin}
@@ -884,6 +1132,18 @@ static const fxdef_t FXS[] = {
     FX("amx_delay", "AMX Delay", delay, delay_t, delay_init, NULL),
     FX("amx_revdelay", "AMX Reverse Delay", rdel, rdel_t, rdel_init, NULL),
     FX("amx_reverb", "AMX Reverb", rv, rv_t, rv_init, NULL),
+    FX("amx_autogain", "AMX Auto Gain", agc, agc_t, NULL, NULL),
+    FX("amx_bassenh", "AMX Bass Enhancer", bassenh, harm_t, NULL, NULL),
+    FX("amx_exciter", "AMX Exciter", exciter, harm_t, NULL, NULL),
+    FX("amx_bassloud", "AMX Bass Loudness", bloud, bloud_t, NULL, NULL),
+    FX("amx_crystal", "AMX Crystalizer", cryst, cryst_t, NULL, NULL),
+    FX("amx_expander", "AMX Expander", expd, expd_t, NULL, NULL),
+    FX("amx_filter", "AMX Filter", filt, filt_t, NULL, NULL),
+    FX("amx_maximizer", "AMX Maximizer", maxi, lim_t, lim_init, lim_fini),
+    FX("amx_mbcomp", "AMX Multiband Compressor", mbc, mbc_t, NULL, NULL),
+    FX("amx_mbgate", "AMX Multiband Gate", mbg, mbg_t, NULL, NULL),
+    FX("amx_stereo", "AMX Stereo Tools", stt, stt_t, NULL, NULL),
+    FX("amx_crossfeed", "AMX Crossfeed", xf, xf_t, NULL, NULL),
 };
 #define NFX ((int)(sizeof FXS / sizeof *FXS))
 

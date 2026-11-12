@@ -784,7 +784,9 @@ class Engine:
             if fxm.active(ch):
                 virt = ch["type"] == "virtual"
                 nds = fxm.nodes(ch)
-                out[f"c{ch['id']}"] = {"nodes": nds, "shape": fxm.shape(ch), "capture_sink": virt,
+                mono = not virt and self.aux_mono(ch.get("source"))
+                out[f"c{ch['id']}"] = {"nodes": nds, "shape": fxm.shape(ch) + ((("mono", "mono"),) if mono else ()),
+                                       "mono": mono, "capture_sink": virt,
                                        "target": f"amx_ch_{ch['id']}" if virt else ch["source"],
                                        "desc": ch["name"]}
         for m in self.cfg["mixes"]:
@@ -812,10 +814,21 @@ class Engine:
                 if self.fx.running(fid) and self.fx.source(fid) in have}
 
     # ---- links (loopbacks)
+    def aux_mono(self, name):
+        """True for a one-channel source whose channel has an AUX position (a microphone on a
+        "pro-audio" card profile). Such a channel isn't left, right or mono, so PipeWire links
+        it to one side of a stereo stream only: the mic would play in one ear."""
+        s = next((x for x in self.sources if x.get("name") == name), None)
+        cmap = [c.strip() for c in str((s or {}).get("channel_map") or "").split(",") if c.strip()]
+        return len(cmap) == 1 and cmap[0] != "mono"
+
     def _new_link(self, src, sink):
+        # a one-channel AUX source gets a mono loopback, which plays on both sides of the
+        # sink (apply_levels makes up the 6 dB the AUX -> mono conversion costs)
+        mono = ("channels=1", "channel_map=mono") if self.aux_mono(src) else ()
         out = pactl("load-module", "module-loopback", f"source={src}", f"sink={sink}",
                     f"latency_msec={self.link_latency()}", "source_dont_move=true",
-                    "sink_dont_move=true")
+                    "sink_dont_move=true", *mono)
         if not (out and out.isdigit()):
             return None
         mid = int(out)
@@ -903,7 +916,7 @@ class Engine:
             return LINK_LATENCY_MS
 
     def apply_levels(self):
-        for key, (mod, *_r) in self.links.items():
+        for key, (mod, _t, src, _s) in self.links.items():
             inp = self.input_by_mod.get(mod)
             mix = next((m for m in self.cfg["mixes"] if m["id"] == key[1]), None)
             if not inp or not mix:
@@ -923,6 +936,9 @@ class Engine:
             if mod in self.fresh:                   # still settling: keep it silent
                 want_mute = True
             vols = inp.get("volume") or {}
+            if list(vols) == ["mono"] and self.aux_mono(src):
+                # AUX -> mono conversion halves the level: +6 dB back (volumes are cubic)
+                want_gain *= 2 ** (1 / 3)
             # one value per stream channel, in channel-map order; left/right ones follow the pan
             want = [round(want_gain * FULL * (pan[0] if "left" in pos else pan[1] if "right" in pos else 1.0))
                     for pos in vols] or [round(want_gain * FULL)]
@@ -944,7 +960,9 @@ class Engine:
         mixer muted are unmuted again; they are remembered in the config so a crash can't leave
         a microphone muted for good."""
         ours = self.cfg.setdefault("_hw_muted", [])
-        want = set() if release_all else {
+        # off by default: muting a mic channel then only silences it in the mixes (each mix
+        # can still mute it on its own), and apps recording the mic directly keep hearing it
+        want = set() if release_all or not self.cfg.get("hw_mute_device") else {
             c.get("source") for c in self.cfg["channels"]
             if c.get("type") == "hw" and c.get("mute") and c.get("source")}
         for s in self.sources:
@@ -1143,6 +1161,7 @@ def normalize(cfg):
     for ch in cfg["channels"]:
         ch.setdefault("apps", [])
     cfg.setdefault("system_default", True)   # catch every unassigned sound in the System channel
+    cfg.setdefault("hw_mute_device", False)  # muting a mic channel also mutes the device for every app
     cfg.setdefault("bypass", [])             # apps deliberately sent straight to a device
     cfg.setdefault("rec_rules", {})          # app name -> input it should record from
     if not cfg.get("_vmic_init"):            # once: mixes named like a mic become virtual mics
@@ -4037,6 +4056,22 @@ class MixerWindow(Adw.ApplicationWindow):
         sw.connect("notify::active", toggled)
         row.append(sw)
         self.default_box.append(row)
+
+        hrow = Gtk.Box(spacing=10, margin_start=18)
+        hrow.append(Gtk.Label(label="Mic mute → all apps", css_classes=["sub"]))
+        hsw = Gtk.Switch(active=bool(self.cfg.get("hw_mute_device")), valign=Gtk.Align.CENTER,
+                         tooltip_text="Off: muting a microphone channel only silences it in "
+                                      "the mixes, and each mix can mute it on its own. On: it "
+                                      "also mutes the device, so apps that record the mic "
+                                      "directly (Discord, OBS, a browser) go silent too")
+
+        def htoggled(s, _p):
+            self.cfg["hw_mute_device"] = s.get_active()
+            self.changed()
+            self.eng.apply_hw_mutes()
+        hsw.connect("notify::active", htoggled)
+        hrow.append(hsw)
+        self.default_box.append(hrow)
 
     def build_hint(self):
         """First-run help, until an app has been given a channel (or it is dismissed)."""

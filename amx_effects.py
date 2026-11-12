@@ -67,9 +67,14 @@ def ensure_built():
 
 # --------------------------------------------------------------------------- definitions
 # A parameter: (port, label, lo, hi, default, unit, digits[, kind])   kind: "toggle" | "int"
-def P(port, label, lo, hi, default, unit="", digits=0, kind=None):
+def P(port, label, lo, hi, default, unit="", digits=0, kind=None, choices=None):
     return {"port": port, "label": label, "lo": lo, "hi": hi, "def": default, "unit": unit,
-            "digits": digits, "kind": kind}
+            "digits": digits, "kind": kind, "choices": choices}
+
+
+def C(port, label, choices, default=0):
+    """A pick-one parameter; the plugin sees the index."""
+    return P(port, label, 0, len(choices) - 1, default, kind="choice", choices=choices)
 
 
 # Standard chain, in signal order.  "where": which objects offer it (hw input, app channel, mix)
@@ -177,8 +182,58 @@ RACK = {
     "reverb": {"title": "Reverb", "cat": "Pitch and time", "plugin": "amx_reverb", "params": [
         P("Size", "Size", 0, 1, 0.6, "", 2), P("Damping", "Damping", 0, 1, 0.4, "", 2),
         P("Predelay", "Predelay", 0, 200, 20, "ms"), P("Mix", "Mix", 0, 1, 0.3, "", 2)]},
+    # The EasyEffects line-up (its gate, compressor, limiter, de-esser, equalizer, noise reduction
+    # and loudness live in the standard chain; pitch, delay and reverb are above)
+    "autogain": {"title": "Auto Gain", "cat": "Dynamics", "plugin": "amx_autogain", "params": [
+        P("Target", "Target loudness", -36, -6, -18, "LUFS"), P("Max Gain", "Max boost", 0, 30, 12, "dB"),
+        P("Max Cut", "Max cut", 0, 30, 12, "dB"), P("Speed", "Speed", 0.5, 20, 3, "s", 1)]},
+    "expander": {"title": "Expander", "cat": "Dynamics", "plugin": "amx_expander", "params": [
+        P("Threshold", "Threshold", -80, 0, -40, "dB"), P("Ratio", "Ratio", 1, 10, 2, ":1", 1),
+        P("Max Reduction", "Max reduction", 0, 90, 40, "dB"), P("Attack", "Attack", 0.1, 100, 5, "ms", 1),
+        P("Release", "Release", 10, 2000, 200, "ms")]},
+    "mbcomp": {"title": "Multiband Compressor", "cat": "Dynamics", "plugin": "amx_mbcomp", "params": [
+        P("Low Crossover", "Low / mid split", 40, 1000, 200, "Hz"),
+        P("High Crossover", "Mid / high split", 1000, 12000, 3000, "Hz"),
+        P("Low Threshold", "Low threshold", -60, 0, -24, "dB"), P("Low Ratio", "Low ratio", 1, 20, 3, ":1", 1),
+        P("Mid Threshold", "Mid threshold", -60, 0, -24, "dB"), P("Mid Ratio", "Mid ratio", 1, 20, 3, ":1", 1),
+        P("High Threshold", "High threshold", -60, 0, -24, "dB"), P("High Ratio", "High ratio", 1, 20, 3, ":1", 1),
+        P("Attack", "Attack", 0.1, 200, 10, "ms", 1), P("Release", "Release", 10, 2000, 150, "ms"),
+        P("Makeup", "Makeup gain", -12, 24, 0, "dB", 1)]},
+    "mbgate": {"title": "Multiband Gate", "cat": "Dynamics", "plugin": "amx_mbgate", "params": [
+        P("Low Crossover", "Low / mid split", 40, 1000, 200, "Hz"),
+        P("High Crossover", "Mid / high split", 1000, 12000, 3000, "Hz"),
+        P("Low Threshold", "Low threshold", -90, 0, -50, "dB"), P("Mid Threshold", "Mid threshold", -90, 0, -50, "dB"),
+        P("High Threshold", "High threshold", -90, 0, -50, "dB"), P("Range", "Reduction", -90, 0, -40, "dB"),
+        P("Attack", "Attack", 0.1, 100, 2, "ms", 1), P("Hold", "Hold", 0, 1000, 100, "ms"),
+        P("Release", "Release", 5, 2000, 150, "ms")]},
+    "maximizer": {"title": "Maximizer", "cat": "Dynamics", "plugin": "amx_maximizer", "params": [
+        P("Threshold", "Threshold", -30, 0, -6, "dB", 1), P("Ceiling", "Ceiling", -12, 0, -0.5, "dB", 1),
+        P("Release", "Release", 1, 1000, 60, "ms")]},
+    "filter": {"title": "Filter", "cat": "Tone and drive", "plugin": "amx_filter", "params": [
+        C("Type", "Type", ["Low pass", "High pass", "Band pass", "Notch"]),
+        P("Frequency", "Frequency", 20, 20000, 1000, "Hz"), P("Resonance", "Resonance (Q)", 0.1, 10, 0.71, "", 2),
+        C("Slope", "Slope", ["12 dB/oct", "24 dB/oct", "48 dB/oct"])]},
+    "bassenh": {"title": "Bass Enhancer", "cat": "Tone and drive", "plugin": "amx_bassenh", "params": [
+        P("Amount", "Amount", 0, 1, 0.4, "", 2), P("Frequency", "Below", 40, 250, 100, "Hz"),
+        P("Harmonics", "Harmonics", 0, 10, 5, "", 1),
+        P("Include Fundamental", "Add the deep bass too", 0, 1, 0, kind="toggle")]},
+    "bassloud": {"title": "Bass Loudness", "cat": "Tone and drive", "plugin": "amx_bassloud", "params": [
+        P("Amount", "Amount", 0, 18, 6, "dB", 1), P("Bass Frequency", "Bass below", 40, 250, 100, "Hz"),
+        P("Treble", "Treble share", 0, 1, 0.35, "", 2), P("Output", "Output", -24, 6, -3, "dB", 1)]},
+    "exciter": {"title": "Exciter", "cat": "Tone and drive", "plugin": "amx_exciter", "params": [
+        P("Amount", "Amount", 0, 1, 0.3, "", 2), P("Frequency", "Above", 1000, 12000, 4000, "Hz"),
+        P("Harmonics", "Harmonics", 0, 10, 5, "", 1)]},
+    "crystal": {"title": "Crystalizer", "cat": "Tone and drive", "plugin": "amx_crystal", "params": [
+        P("Intensity", "Intensity", 0, 10, 2, "", 1), P("Output", "Output", -24, 6, -3, "dB", 1)]},
+    "stereo": {"title": "Stereo Tools", "cat": "Stereo", "plugin": "amx_stereo", "params": [
+        P("Balance", "Balance", -1, 1, 0, "", 2), P("Width", "Width", 0, 2, 1, "×", 2),
+        P("Mono", "Mono", 0, 1, 0, kind="toggle"), P("Swap", "Swap left / right", 0, 1, 0, kind="toggle"),
+        P("Invert L", "Invert left phase", 0, 1, 0, kind="toggle"),
+        P("Invert R", "Invert right phase", 0, 1, 0, kind="toggle")]},
+    "crossfeed": {"title": "Crossfeed", "cat": "Stereo", "plugin": "amx_crossfeed", "params": [
+        P("Cutoff", "Cutoff", 300, 2000, 700, "Hz"), P("Feed", "Feed level", 1, 15, 4.5, "dB", 1)]},
 }
-RACK_CATS = ["Tone and drive", "Modulation", "Pitch and time"]
+RACK_CATS = ["Dynamics", "Tone and drive", "Modulation", "Pitch and time", "Stereo"]
 
 
 def kind_of(obj):
@@ -295,7 +350,11 @@ def _q(s):
     return '"' + str(s).replace("\\", "").replace('"', "'") + '"'
 
 
-def make_conf(tag, nds, target, capture_sink, desc):
+def make_conf(tag, nds, target, capture_sink, desc, mono=False):
+    """mono: the target is a one-channel source with an AUX position (a "pro-audio" profile
+    microphone). A stereo capture would take that channel on one side only, so the chain
+    captures it as MONO and a splitter feeds it to both inputs of the first effect. The
+    splitter also gives back the 6 dB that PipeWire drops when converting AUX0 to MONO."""
     lines = []
     for n, label, c in nds:
         ctl = " ".join(f"{_q(k)} = {v:.6g}" for k, v in c.items())
@@ -306,12 +365,24 @@ def make_conf(tag, nds, target, capture_sink, desc):
         links.append(f'          {{ output = "{a}:Out L" input = "{b}:In L" }}')
         links.append(f'          {{ output = "{a}:Out R" input = "{b}:In R" }}')
     first, last = nds[0][0], nds[-1][0]
+    if mono:
+        lines.insert(0, '          { type = builtin name = amx_split label = linear '
+                        'control = { "Mult" = 2.0 "Add" = 0.0 } }')
+        links.append(f'          {{ output = "amx_split:Out" input = "{first}:In L" }}')
+        links.append(f'          {{ output = "amx_split:Out" input = "{first}:In R" }}')
+        inputs = '[ "amx_split:In" ]'
+        chans = "audio.channels = 1\n      audio.position = [ MONO ]"
+        play_fmt = " audio.channels = 2 audio.position = [ FL FR ]"
+    else:
+        inputs = f'[ "{first}:In L" "{first}:In R" ]'
+        chans = "audio.channels = 2\n      audio.position = [ FL FR ]"
+        play_fmt = ""
     cap = (f'node.name = "amx_fxin_{tag}" node.description = {_q(desc + " (effects input)")} '
            f'target.object = {_q(target)} node.dont-reconnect = true node.dont-fallback = true '
            f'node.dont-move = true media.role = "DSP"'
            + (" stream.capture.sink = true" if capture_sink else ""))
     play = (f'node.name = "amx_fx_{tag}" node.description = {_q(desc + " (effects)")} '
-            f'media.class = Audio/Source')
+            f'media.class = Audio/Source' + play_fmt)
     return f"""# generated by Audio Mixer - do not edit
 context.properties = {{ log.level = 1 }}
 context.spa-libs = {{
@@ -333,11 +404,10 @@ context.modules = [
         links = [
 {chr(10).join(links)}
         ]
-        inputs = [ "{first}:In L" "{first}:In R" ]
+        inputs = {inputs}
         outputs = [ "{last}:Out L" "{last}:Out R" ]
       }}
-      audio.channels = 2
-      audio.position = [ FL FR ]
+      {chans}
       capture.props = {{ {cap} }}
       playback.props = {{ {play} }}
     }}
@@ -440,7 +510,8 @@ class FxHost:
             os.makedirs(RUN_DIR, exist_ok=True)
             conf = os.path.join(RUN_DIR, f"fx-{tag}.conf")
             with open(conf, "w") as f:
-                f.write(make_conf(tag, w["nodes"], w["target"], w["capture_sink"], w["desc"]))
+                f.write(make_conf(tag, w["nodes"], w["target"], w["capture_sink"], w["desc"],
+                                  w.get("mono", False)))
             try:
                 proc = subprocess.Popen(["pipewire", "-c", conf], stdin=subprocess.DEVNULL,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -520,6 +591,8 @@ class FxHost:
 def fmt(p, v):
     if p.get("kind") == "toggle":
         return "On" if v >= 0.5 else "Off"
+    if p.get("kind") == "choice":
+        return p["choices"][min(max(int(round(v)), 0), len(p["choices"]) - 1)]
     d = p.get("digits", 0)
     s = f"{v:.{d}f}" if d else f"{round(v)}"
     if p["unit"] == "Hz" and v >= 1000:
@@ -533,6 +606,11 @@ def param_row(p, value, on_change, compact=False):
     if p.get("kind") == "toggle":
         row = Adw.SwitchRow(title=p["label"], active=value >= 0.5)
         row.connect("notify::active", lambda r, _x: on_change(1.0 if r.get_active() else 0.0))
+        return row
+    if p.get("kind") == "choice":
+        row = Adw.ComboRow(title=p["label"], model=Gtk.StringList.new(p["choices"]))
+        row.set_selected(min(max(int(round(value)), 0), len(p["choices"]) - 1))
+        row.connect("notify::selected", lambda r, _x: on_change(float(r.get_selected())))
         return row
     row = Adw.ActionRow(title=p["label"])
     lo, hi = p["lo"], p["hi"]
@@ -973,7 +1051,10 @@ def rack_editor(obj, changed, structural, toast=None, parent=None):
                 rebuild()
             b.connect("clicked", do_add)
             pbox.append(b)
-    pop.set_child(pbox)
+    psw = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, propagate_natural_height=True,
+                             max_content_height=520)
+    psw.set_child(pbox)
+    pop.set_child(psw)
     add.set_popover(pop)
 
     ppop = Gtk.Popover()
