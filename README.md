@@ -41,6 +41,8 @@ In a channel's **Channel settings**, turn on Ducking and choose which channels t
 
 The **Soundboard** page holds pads with a name, a waveform, play/stop and a stable 4-digit id. Right-click a pad (or ⋯) to trim it on the waveform and set its own volume. Pressing a pad again layers another copy instead of cutting the first one off. The whole board plays into one channel you choose (or a new "Soundboard" channel), so the mixer decides who hears it: your headphones, the stream, or the microphone mix your friends hear. Sounds are copied into `~/.config/audio-mixer/sounds/` (decoded copies are kept in `~/.cache/audio-mixer/pcm/` rather than in memory; safe to delete), and the whole board exports and imports as one `.zip` from **Settings ▸ Backups**. Needs `ffmpeg` for anything other than 16-bit WAV.
 
+**Find sounds online** (optional, off by default: **Settings ▸ Soundboard ▸ Online sound search**) searches [MyInstants](https://www.myinstants.com/) (meme and sound-button clips; empty search shows popular ones) or [Openverse](https://openverse.org/) (Creative Commons audio from Freesound, Wikimedia, Jamendo and more). ▶ previews a sound on the System channel; + adds it to the board under its title. Downloads are cached in `~/.cache/audio-mixer/web/`. While the switch is off, the mixer never contacts either site.
+
 ### Web Companion
 
 **Settings ▸ Web Companion** serves the mixer to any phone or tablet on your network (port 8787 by default) as a mixing console:

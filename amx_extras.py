@@ -1,18 +1,22 @@
 """Audio Mixer extras: Soundboard, Web Companion, Profiles, MIDI instruments, Settings page."""
 import copy
 import hashlib
+import html
 import http.server
 import json
 import math
 import os
 import queue
 import random
+import re
 import shutil
 import socket
 import socketserver
 import subprocess
 import threading
 import time
+import urllib.parse
+import urllib.request
 import zipfile
 from array import array
 
@@ -361,11 +365,14 @@ class Soundboard:
             if i not in used:
                 return i
 
-    def add_files(self, paths):
+    def add_files(self, paths, names=None):
+        """Copy files onto the board. `names` (optional, same order) sets the pad names and file names."""
         os.makedirs(SOUNDS_DIR, exist_ok=True)
         added = []
-        for p in paths:
+        for i, p in enumerate(paths):
             base = os.path.basename(p)
+            if names and names[i]:
+                base = _safe_name(names[i]) + os.path.splitext(base)[1]
             dest = os.path.join(SOUNDS_DIR, base)
             n = 1
             while os.path.exists(dest) and not os.path.samefile(dest, p):
@@ -374,7 +381,8 @@ class Soundboard:
                 n += 1
             if not os.path.exists(dest):
                 shutil.copy2(p, dest)
-            s = {"id": self.new_id(), "name": os.path.splitext(base)[0][:40], "file": dest,
+            nm = names[i].strip() if names and names[i] else os.path.splitext(base)[0]
+            s = {"id": self.new_id(), "name": nm[:40], "file": dest,
                  "start": 0.0, "end": None, "vol": 100}
             self.board["sounds"].append(s)
             added.append(s)
@@ -532,7 +540,11 @@ class SoundboardPage(Gtk.Box):
         add.set_child(Gtk.Label(label="+ Add sounds"))
         add.connect("clicked", lambda *_: file_dialog(self, "Add sounds", multiple=True, done=self._add,
                                                       patterns=Soundboard.AUDIO))
+        self.web = Gtk.Button(valign=Gtk.Align.CENTER, tooltip_text="Search MyInstants and Openverse for sounds")
+        self.web.set_child(Gtk.Label(label="Find sounds online"))
+        self.web.connect("clicked", lambda *_: WebSoundsDialog(self).present(self.win))
         top.append(stop)
+        top.append(self.web)
         top.append(add)
         self.append(top)
         self.append(Gtk.Label(
@@ -560,8 +572,8 @@ class SoundboardPage(Gtk.Box):
         return True
     _was_playing = False
 
-    def _add(self, paths):
-        added = self.board.add_files(paths)
+    def _add(self, paths, names=None):
+        added = self.board.add_files(paths, names)
         self.win.changed()
         self.rebuild()
         self.board.preload(added, lambda _sid: [w.queue_draw() for w in self.waves])
@@ -624,6 +636,7 @@ class SoundboardPage(Gtk.Box):
             r.append(box)
 
     def rebuild(self):
+        self.web.set_visible(bool(self.win.cfg.get("web_sounds")))      # optional: Settings ▸ Soundboard
         self.build_routing()
         _clear(self.flow)
         self.waves = []
@@ -729,6 +742,264 @@ class SoundboardPage(Gtk.Box):
         dlg.present(self.win)
         if not self.board.duration(s):
             self.board.preload([s], lambda _i: (wave.queue_draw(), upd_info()))
+
+
+# =========================================================================== online sounds (optional)
+# Off by default (Settings ▸ Soundboard ▸ Online sound search): the mixer never contacts these sites until the
+# switch is on. Two sources: MyInstants (meme / sound-button clips; the site has no API, so its pages are read)
+# and Openverse (Creative Commons audio from Freesound, Wikimedia, Jamendo and others, through its public API).
+WEB_CACHE = os.path.join(GLib.get_user_cache_dir(), "audio-mixer", "web")
+WEB_UA = "Mozilla/5.0 (X11; Linux x86_64) AudioMixer"
+WEB_MAX = 25 << 20          # largest clip we download
+MYINSTANTS = "https://www.myinstants.com"
+AUDIO_EXT = {".mp3", ".wav", ".ogg", ".oga", ".opus", ".flac", ".m4a", ".aac", ".webm"}
+
+
+def _safe_name(name):
+    n = re.sub(r"[^\w\-. ()!?',&]+", "_", name).strip(" ._")
+    return n[:60] or "sound"
+
+
+def _http(url, limit=4 << 20):
+    req = urllib.request.Request(url, headers={"User-Agent": WEB_UA, "Accept-Language": "en"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data = r.read(limit + 1)
+    if len(data) > limit:
+        raise OSError("file too large")
+    return data
+
+
+def parse_myinstants(page_html):
+    """Sound buttons on a MyInstants listing page -> [{"name", "url", "info"}]."""
+    out, seen = [], set()
+    for m in re.finditer(r"<button\b[^>]*>", page_html):
+        tag = m.group(0)
+        p = re.search(r"(/media/sounds/[^'\"\s<>]+)", tag)
+        if not p:
+            continue
+        url = urllib.parse.urljoin(MYINSTANTS, html.unescape(p.group(1)))
+        if url in seen:
+            continue
+        seen.add(url)
+        nxt = page_html.find("<button", m.end())
+        ahead = page_html[m.end():nxt if nxt > 0 else m.end() + 3000]
+        a = re.search(r"<a\b[^>]*class=\"[^\"]*instant-link[^\"]*\"[^>]*>(.*?)</a>", ahead, re.S)
+        t = re.search(r"title=\"(?:Play\s+)?(.*?)(?:\s+sound)?\"", tag)
+        name = re.sub(r"<[^>]+>", "", a.group(1)) if a else (t.group(1) if t else "")
+        name = html.unescape(name).strip() or os.path.splitext(os.path.basename(url))[0]
+        out.append({"name": name, "url": url, "info": "MyInstants"})
+    return out
+
+
+def search_myinstants(q, page):
+    if q:
+        url = f"{MYINSTANTS}/en/search/?" + urllib.parse.urlencode({"name": q, "page": page})
+    else:
+        url = f"{MYINSTANTS}/en/index/us/?page={page}"        # popular buttons
+    doc = _http(url).decode("utf-8", "replace")
+    res = parse_myinstants(doc)
+    return res, bool(res) and f"page={page + 1}" in doc
+
+
+def search_openverse(q, page):
+    if not q:
+        return [], False
+    url = "https://api.openverse.org/v1/audio/?" + urllib.parse.urlencode({"q": q, "page": page, "page_size": 20})
+    d = json.loads(_http(url))
+    res = []
+    for r in d.get("results", []):
+        if not str(r.get("url", "")).startswith(("https://", "http://")):
+            continue
+        ms = r.get("duration") or 0
+        lc = str(r.get("license") or "").lower()
+        lic = {"cc0": "CC0", "pdm": "Public domain", "": None}.get(
+            lc, f"CC {lc.upper()} {r.get('license_version') or ''}".strip())
+        bits = [f"{ms // 60000}:{ms // 1000 % 60:02d}" if ms else None,
+                f"by {r['creator']}" if r.get("creator") else None, lic, r.get("source") or r.get("provider")]
+        res.append({"name": (r.get("title") or "Sound").strip(), "url": r["url"],
+                    "info": " · ".join(b for b in bits if b)})
+    return res, page < (d.get("page_count") or 0)
+
+
+WEB_SOURCES = [("MyInstants", search_myinstants), ("Openverse (Creative Commons)", search_openverse)]
+
+
+def web_fetch(url):
+    """Download a clip once into WEB_CACHE; returns the local path."""
+    ext = os.path.splitext(urllib.parse.urlparse(url).path)[1].lower()
+    path = os.path.join(WEB_CACHE, hashlib.sha1(url.encode()).hexdigest()[:20] + (ext if ext in AUDIO_EXT else ".mp3"))
+    if not os.path.exists(path):
+        os.makedirs(WEB_CACHE, exist_ok=True)
+        data = _http(url, WEB_MAX)
+        with open(path + ".tmp", "wb") as f:
+            f.write(data)
+        os.replace(path + ".tmp", path)
+    return path
+
+
+class WebPreview:
+    """Plays one downloaded clip on the default output (the System channel), not the soundboard's channel."""
+    def __init__(self):
+        self.procs = []
+
+    def play(self, path):
+        self.stop()
+        try:
+            dec = subprocess.Popen(["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-f", "f32le", "-ac", "2",
+                                    "-ar", str(RATE), "pipe:1"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            out = subprocess.Popen(["paplay", "--raw", "--format=float32le", f"--rate={RATE}", "--channels=2",
+                                    "--client-name=amx-soundboard-preview"], stdin=dec.stdout,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            return False
+        dec.stdout.close()
+        self.procs = [dec, out]
+        return True
+
+    def playing(self):
+        return any(p.poll() is None for p in self.procs)
+
+    def stop(self):
+        for p in self.procs:
+            if p.poll() is None:
+                p.kill()
+        self.procs = []
+
+
+class WebSoundsDialog(Adw.Dialog):
+    def __init__(self, page):
+        super().__init__(content_width=620, content_height=640, title="Find sounds online")
+        self.page, self.win = page, page.win
+        self.gen = 0                 # bumps on every new search, so late answers to old ones are dropped
+        self.pg = 1
+        self.preview = WebPreview()
+        self.prev_btn = None
+        tv = Adw.ToolbarView()
+        tv.add_top_bar(Adw.HeaderBar())
+        self.set_child(tv)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=6, margin_bottom=16,
+                      margin_start=16, margin_end=16)
+        tv.set_content(box)
+        bar = Gtk.Box(spacing=8)
+        self.src = Gtk.DropDown.new_from_strings([n for n, _f in WEB_SOURCES])
+        self.src.set_selected(min(self.win.cfg.get("web_source", 0), len(WEB_SOURCES) - 1))
+        self.src.connect("notify::selected", self._src_changed)
+        self.entry = Gtk.SearchEntry(hexpand=True, placeholder_text="Search sounds…", search_delay=450)
+        self.entry.connect("search-changed", lambda *_: self.search())
+        bar.append(self.src)
+        bar.append(self.entry)
+        box.append(bar)
+        self.status = Gtk.Label(xalign=0, wrap=True, css_classes=["sub"])
+        box.append(self.status)
+        sw = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["boxed-list"])
+        self.more = Gtk.Button(label="Load more", halign=Gtk.Align.CENTER, visible=False)
+        self.more.connect("clicked", lambda *_: self.search(self.pg + 1))
+        inner.append(self.list)
+        inner.append(self.more)
+        sw.set_child(inner)
+        box.append(sw)
+        box.append(Gtk.Label(label="▶ previews on the System channel, not the soundboard's. Openverse sounds are Creative Commons: credit the "
+                                   "creator where the licence asks for it.", xalign=0, wrap=True, css_classes=["sub"]))
+        self.tick = GLib.timeout_add(250, self._tick)
+        self.connect("closed", lambda *_: (self.preview.stop(), GLib.source_remove(self.tick)))
+        self.search()
+
+    def _src_changed(self, *_):
+        self.win.cfg["web_source"] = self.src.get_selected()
+        self.win.changed()
+        self.search()
+
+    def _tick(self):
+        if self.prev_btn and not self.preview.playing():
+            self.prev_btn.set_icon_name("media-playback-start-symbolic")
+            self.prev_btn = None
+        return True
+
+    def search(self, pg=1):
+        self.gen += 1
+        gen, q = self.gen, self.entry.get_text().strip()
+        name, fn = WEB_SOURCES[self.src.get_selected()]
+        self.pg = pg
+        self.more.set_visible(False)
+        if pg == 1:
+            _clear(self.list)
+            self.list.set_visible(False)
+        if not q and fn is search_openverse:
+            self.status.set_label("Type something to search Openverse.")
+            return
+        self.status.set_label(f"Searching {name}…" if q else f"Loading popular sounds from {name}…")
+
+        def work():
+            try:
+                res, more = fn(q, pg)
+                err = None
+            except Exception as e:          # network, HTTP or parse error: report it, never crash the mixer
+                res, more, err = [], False, getattr(e, "reason", None) or e
+            GLib.idle_add(lambda: (self._show(gen, q, res, more, err), False)[1])
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show(self, gen, q, res, more, err):
+        if gen != self.gen:
+            return
+        if err:
+            self.status.set_label(f"Couldn't reach the site: {err}")
+            return
+        for r in res:
+            self.list.append(self._row(r))
+        n = len(res) + (self.pg - 1) * 20
+        self.list.set_visible(self.list.get_first_child() is not None)
+        self.status.set_label(("No sounds found." if not n else
+                               f"Results for “{q}”" if q else "Popular sounds"))
+        self.more.set_visible(more)
+
+    def _row(self, r):
+        row = Adw.ActionRow(title=GLib.markup_escape_text(r["name"]), subtitle=GLib.markup_escape_text(r["info"]),
+                            title_lines=1, subtitle_lines=1)
+        pv = Gtk.Button(icon_name="media-playback-start-symbolic", valign=Gtk.Align.CENTER, css_classes=["flat"],
+                        tooltip_text="Preview")
+        add = Gtk.Button(icon_name="list-add-symbolic", valign=Gtk.Align.CENTER, css_classes=["flat"],
+                         tooltip_text="Add to the soundboard")
+
+        def fetch(then, btn):
+            btn.set_sensitive(False)
+
+            def work():
+                try:
+                    path, err = web_fetch(r["url"]), None
+                except Exception as e:
+                    path, err = None, getattr(e, "reason", None) or e
+                GLib.idle_add(lambda: (btn.set_sensitive(True),
+                                       then(path) if path else self.win.toast(f"Download failed: {err}"), False)[2])
+            threading.Thread(target=work, daemon=True).start()
+
+        def do_preview(btn):
+            if self.prev_btn is btn:
+                self.preview.stop()
+                return
+            def go(path):
+                if self.preview.play(path):
+                    if self.prev_btn:
+                        self.prev_btn.set_icon_name("media-playback-start-symbolic")
+                    self.prev_btn = btn
+                    btn.set_icon_name("media-playback-stop-symbolic")
+                else:
+                    self.win.toast("Preview needs ffmpeg and paplay")
+            fetch(go, btn)
+
+        def do_add(btn):
+            def go(path):
+                self.page._add([path], [r["name"]])
+                btn.set_icon_name("object-select-symbolic")
+                btn.set_tooltip_text("Added")
+                self.win.toast(f"Added “{r['name'][:40]}”")
+            fetch(go, btn)
+        pv.connect("clicked", do_preview)
+        add.connect("clicked", do_add)
+        row.add_suffix(pv)
+        row.add_suffix(add)
+        return row
 
 
 # =========================================================================== profiles
@@ -1238,6 +1509,20 @@ class SettingsPage(Gtk.Box):
                                                        win.toast("Copied")))
                 r.add_suffix(cp)
                 g.add(r)
+
+        # ---- soundboard
+        g = self.group("Soundboard")
+        ws = Adw.SwitchRow(title="Online sound search",
+                           subtitle="Adds “Find sounds online” to the Soundboard page: search MyInstants and "
+                                    "Openverse and add sounds with one click. Off, the mixer never contacts them.",
+                           active=bool(cfg.get("web_sounds")))
+
+        def set_ws(r, _p):
+            cfg["web_sounds"] = r.get_active()
+            win.changed()
+            win.soundboard_page.rebuild()
+        ws.connect("notify::active", set_ws)
+        g.add(ws)
 
         # ---- backups
         g = self.group("Backups")
