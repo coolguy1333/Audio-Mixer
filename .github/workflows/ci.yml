@@ -14,11 +14,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gcc
           pipx install ruff
+          /usr/bin/python3 -m pip install --break-system-packages numpy==2.2.6 miniaudio==1.61
       - name: Lint (errors only)
         run: ruff check --select F,E9,PLE --line-length 200 .
       - name: Byte-compile
-        run: python3 -m py_compile audio_mixer.py amx_effects.py amx_extras.py amx_sounds.py
+        run: python3 -m py_compile audio_mixer.py amx_effects.py amx_extras.py amx_sounds.py windows/*.py
       - name: Build the effects plugin
         run: gcc -O2 -Wall -fPIC -shared -o fx/amx_fx.so fx/amx_fx.c -DAMX_NO_RNNOISE -lm
       - name: Unit tests
-        run: /usr/bin/python3 -m unittest discover -s tests -v
+        run: AMXSB_NO_AUDIO=1 /usr/bin/python3 -m unittest discover -s tests -v
