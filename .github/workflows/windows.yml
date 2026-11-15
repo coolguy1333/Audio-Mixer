@@ -2,8 +2,9 @@ name: Windows soundboard
 
 on:
   push:
+    branches: ["**"]
+    tags: ["win-v*"]           # tag pushes ignore the paths filter
     paths: ["windows/**", "amx_sounds.py", "tests/**", ".github/workflows/windows.yml"]
-    tags: ["win-v*"]
   pull_request:
     paths: ["windows/**", "amx_sounds.py", "tests/**", ".github/workflows/windows.yml"]
   workflow_dispatch:
