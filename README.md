@@ -39,9 +39,21 @@ In a channel's **Channel settings**, turn on Ducking and choose which channels t
 
 ### Soundboard
 
-The **Soundboard** page holds pads with a name, a waveform, play/stop and a stable 4-digit id. Right-click a pad (or ⋯) to trim it on the waveform and set its own volume. Pressing a pad again layers another copy instead of cutting the first one off. The whole board plays into one channel you choose (or a new "Soundboard" channel), so the mixer decides who hears it: your headphones, the stream, or the microphone mix your friends hear. Sounds are copied into `~/.config/audio-mixer/sounds/` (decoded copies are kept in `~/.cache/audio-mixer/pcm/` rather than in memory; safe to delete), and the whole board exports and imports as one `.zip` from **Settings ▸ Backups**. Needs `ffmpeg` for anything other than 16-bit WAV.
+The **Soundboard** page holds pads with a name, a waveform, play/stop and a stable 4-digit id. Right-click a pad (or ⋯) to trim it on the waveform and set its own volume. Pressing a pad again layers another copy instead of cutting the first one off. The whole board plays into one channel you choose (or a new "Soundboard" channel), so the mixer decides who hears it: your headphones, the stream, or the microphone mix your friends hear. Sounds are copied into `~/.config/audio-mixer/sounds/` (decoded copies are kept in `~/.cache/audio-mixer/pcm/` rather than in memory; safe to delete), and the whole board exports and imports as one `.zip` from **Settings ▸ Backups**. Needs `ffmpeg` for anything other than 16-bit WAV. The same audio can't go on the board twice: adding, downloading or importing a sound that is already there (same file contents) is skipped with a note.
 
-**Find sounds online** (optional, off by default: **Settings ▸ Soundboard ▸ Online sound search**) searches [MyInstants](https://www.myinstants.com/) (meme and sound-button clips; empty search shows popular ones) or [Openverse](https://openverse.org/) (Creative Commons audio from Freesound, Wikimedia, Jamendo and more). ▶ previews a sound on the System channel; + adds it to the board under its title. Downloads are cached in `~/.cache/audio-mixer/web/`. While the switch is off, the mixer never contacts either site.
+Drag audio files from your file manager onto the page to add them.
+
+**Find sounds online** is opt-in: the first click on the button asks before anything is sent to any site, and **Settings ▸ Soundboard ▸ Online sound search** turns it off again. Pick a source, type, then ▶ to preview (on the System channel) and + to add the sound to the board under its title. Each source keeps its own search text.
+
+| Source | What's there | Needs |
+|---|---|---|
+| [MyInstants](https://www.myinstants.com/) | meme and sound-button clips; an empty search shows popular ones | nothing (the site has no API, so its pages are read) |
+| [Freesound](https://freesound.org/) | 600,000+ sound effects; an empty search shows the most downloaded | a free API key from [freesound.org/apiv2/apply](https://freesound.org/apiv2/apply), pasted once in the search window |
+| [Openverse](https://openverse.org/) | Creative Commons audio from Freesound, Wikimedia, Jamendo, ccMixter and more | nothing |
+| [Wikimedia Commons](https://commons.wikimedia.org/) | free audio files | nothing |
+| Link (any site) | paste a link to an audio file or to a page with a sound on it (for example a MyInstants page). With [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) installed, also the audio of a video (YouTube, TikTok, SoundCloud, …, up to 20 minutes) | `yt-dlp` for video sites |
+
+Downloads are cached in `~/.cache/audio-mixer/web/` (safe to delete). Freesound, Openverse and Commons sounds carry the licence shown in the result: credit the creator where it asks for it.
 
 ### Web Companion
 
@@ -83,9 +95,11 @@ The feature set follows [Waveline](https://github.com/Nakildias/Waveline). This 
 - PipeWire with `pipewire-pulse` (or PulseAudio), plus `pactl` and `parec`
 - Python 3.10+, PyGObject, GTK 4, libadwaita 1.5+, pycairo
 - For effects: `gcc` and `rnnoise` (without rnnoise everything except noise suppression works)
-- Optional: `ffmpeg` (soundboard formats), `fluidsynth` (MIDI instruments), KDE Plasma (KWin) for the deck's always-on-top and hide-from-taskbar options, `nvidia-smi` for NVIDIA GPU stats
+- Optional: `ffmpeg` (soundboard formats and online-sound previews), `yt-dlp` (soundboard sounds from video sites), `fluidsynth` (MIDI instruments), KDE Plasma (KWin) for the deck's always-on-top and hide-from-taskbar options, `nvidia-smi` for NVIDIA GPU stats
 
 Arch / CachyOS: `sudo pacman -S python-gobject gtk4 libadwaita python-cairo libpulse gcc rnnoise ffmpeg fluidsynth`
+
+Ubuntu 24.04: `sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 pipewire-pulse pulseaudio-utils gcc ffmpeg fluidsynth`, then run `python3 audio_mixer.py`. Ubuntu doesn't package rnnoise, so noise suppression is off there; everything else works.
 
 ## Install (Arch / CachyOS)
 
@@ -128,6 +142,14 @@ sh opendeck/install.sh
 ```
 
 Restart OpenDeck afterwards. The plugin talks to the mixer through a local socket at `$XDG_RUNTIME_DIR/audio-mixer.sock`, which takes JSON lines. The protocol is documented in `ControlServer` in `audio_mixer.py`.
+
+## Development
+
+```sh
+python3 -m unittest discover -s tests
+```
+
+The tests need no GTK, sound server or network. CI (`.github/workflows/ci.yml`) also lints, byte-compiles and builds the effects plugin.
 
 ## License
 
