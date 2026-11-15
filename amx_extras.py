@@ -114,6 +114,7 @@ class Soundboard:
         self._meta = {}
         self._peaks = {}      # (sid, n, buckets) -> normalised list for drawing
         self.playing = {}     # sid -> [(proc, t0, dur)]
+        self.skipped = []     # names the last add/import left out because that audio was already on the board
         self._lock = threading.Lock()
 
     @property
@@ -365,12 +366,36 @@ class Soundboard:
             if i not in used:
                 return i
 
-    def add_files(self, paths, names=None):
-        """Copy files onto the board. `names` (optional, same order) sets the pad names and file names."""
+    def digest(self, s):
+        """SHA-1 of a sound's file, cached in its entry. None if the file is gone."""
+        if not s.get("sha1"):
+            try:
+                s["sha1"] = _sha1(s["file"])
+            except OSError:
+                return None
+        return s["sha1"]
+
+    def has_src(self, url):
+        return any(s.get("src") == url for s in self.board["sounds"])
+
+    def add_files(self, paths, names=None, srcs=None):
+        """Copy files onto the board. `names` (optional, same order) sets the pad names and file names; `srcs`
+        records where a download came from. A file whose audio is already on the board is skipped and its name
+        put in self.skipped."""
         os.makedirs(SOUNDS_DIR, exist_ok=True)
-        added = []
+        added, self.skipped = [], []
+        known = {self.digest(s) for s in self.board["sounds"]}
         for i, p in enumerate(paths):
             base = os.path.basename(p)
+            src = srcs[i] if srcs else None
+            try:
+                dig = _sha1(p)
+            except OSError:
+                continue
+            if dig in known or (src and self.has_src(src)):
+                self.skipped.append(names[i] if names and names[i] else os.path.splitext(base)[0])
+                continue
+            known.add(dig)
             if names and names[i]:
                 base = _safe_name(names[i]) + os.path.splitext(base)[1]
             dest = os.path.join(SOUNDS_DIR, base)
@@ -383,7 +408,9 @@ class Soundboard:
                 shutil.copy2(p, dest)
             nm = names[i].strip() if names and names[i] else os.path.splitext(base)[0]
             s = {"id": self.new_id(), "name": nm[:40], "file": dest,
-                 "start": 0.0, "end": None, "vol": 100}
+                 "start": 0.0, "end": None, "vol": 100, "sha1": dig}
+            if src:
+                s["src"] = src
             self.board["sounds"].append(s)
             added.append(s)
         return added
@@ -421,6 +448,8 @@ class Soundboard:
 
     def import_zip(self, path):
         os.makedirs(SOUNDS_DIR, exist_ok=True)
+        self.skipped = []
+        known = {self.digest(x) for x in self.board["sounds"]}
         with zipfile.ZipFile(path) as z:
             b = json.loads(z.read("soundboard.json"))
             n = 0
@@ -428,6 +457,15 @@ class Soundboard:
                 arc = s.get("file", "")
                 if not arc.startswith("sounds/") or ".." in arc or arc not in z.namelist():
                     continue
+                h = hashlib.sha1()
+                with z.open(arc) as src:
+                    for chunk in iter(lambda: src.read(1 << 20), b""):
+                        h.update(chunk)
+                dig = h.hexdigest()
+                if dig in known:                         # this audio is already on the board
+                    self.skipped.append(str(s.get("name", "Sound")))
+                    continue
+                known.add(dig)
                 dest = os.path.join(SOUNDS_DIR, os.path.basename(arc))
                 stem, ext = os.path.splitext(dest)
                 k = 1
@@ -438,9 +476,12 @@ class Soundboard:
                     shutil.copyfileobj(src, out)
                 used = {x["id"] for x in self.board["sounds"]}
                 sid = str(s.get("id")) if str(s.get("id")) not in used else self.new_id()
-                self.board["sounds"].append({"id": sid, "name": str(s.get("name", "Sound"))[:40], "file": dest,
-                                             "start": float(s.get("start") or 0), "end": s.get("end"),
-                                             "vol": int(s.get("vol", 100))})
+                e = {"id": sid, "name": str(s.get("name", "Sound"))[:40], "file": dest,
+                     "start": float(s.get("start") or 0), "end": s.get("end"), "vol": int(s.get("vol", 100)),
+                     "sha1": dig}
+                if isinstance(s.get("src"), str):
+                    e["src"] = s["src"]
+                self.board["sounds"].append(e)
                 n += 1
         return n
 
@@ -572,11 +613,16 @@ class SoundboardPage(Gtk.Box):
         return True
     _was_playing = False
 
-    def _add(self, paths, names=None):
-        added = self.board.add_files(paths, names)
-        self.win.changed()
-        self.rebuild()
-        self.board.preload(added, lambda _sid: [w.queue_draw() for w in self.waves])
+    def _add(self, paths, names=None, srcs=None):
+        added = self.board.add_files(paths, names, srcs)
+        if self.board.skipped:
+            sk = self.board.skipped
+            self.win.toast(f"Already on the board: {sk[0][:40]}" + (f" and {len(sk) - 1} more" if len(sk) > 1 else ""))
+        if added:
+            self.win.changed()
+            self.rebuild()
+            self.board.preload(added, lambda _sid: [w.queue_draw() for w in self.waves])
+        return added
 
     def build_routing(self):
         r = self.routing
@@ -758,6 +804,14 @@ AUDIO_EXT = {".mp3", ".wav", ".ogg", ".oga", ".opus", ".flac", ".m4a", ".aac", "
 def _safe_name(name):
     n = re.sub(r"[^\w\-. ()!?',&]+", "_", name).strip(" ._")
     return n[:60] or "sound"
+
+
+def _sha1(path):
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _http(url, limit=4 << 20):
@@ -988,13 +1042,23 @@ class WebSoundsDialog(Adw.Dialog):
                     self.win.toast("Preview needs ffmpeg and paplay")
             fetch(go, btn)
 
+        def mark_added():
+            add.set_icon_name("object-select-symbolic")
+            add.set_tooltip_text("Already on the soundboard")
+            add.set_sensitive(False)
+
         def do_add(btn):
+            if self.page.board.has_src(r["url"]):
+                mark_added()
+                return
+
             def go(path):
-                self.page._add([path], [r["name"]])
-                btn.set_icon_name("object-select-symbolic")
-                btn.set_tooltip_text("Added")
-                self.win.toast(f"Added “{r['name'][:40]}”")
+                if self.page._add([path], [r["name"]], [r["url"]]):
+                    self.win.toast(f"Added “{r['name'][:40]}”")
+                mark_added()                 # added now, or the same audio was already there
             fetch(go, btn)
+        if self.page.board.has_src(r["url"]):
+            mark_added()
         pv.connect("clicked", do_preview)
         add.connect("clicked", do_add)
         row.add_suffix(pv)
@@ -1577,5 +1641,7 @@ class SettingsPage(Gtk.Box):
                 return
             self.win.changed()
             self.win.soundboard_page.rebuild()
-            self.win.toast(f"Imported {n} sound{'s' if n != 1 else ''}")
+            sk = len(self.win.app.board.skipped)
+            self.win.toast(f"Imported {n} sound{'s' if n != 1 else ''}" +
+                           (f" ({sk} already on the board)" if sk else ""))
         file_dialog(self, "Import soundboard", done=done, patterns=["Soundboard", "*.zip"])
