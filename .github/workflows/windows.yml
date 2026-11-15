@@ -14,8 +14,9 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    env:
-      AMXSB_HOME: ${{ runner.temp }}\amxsb
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +33,10 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Self-test from source
-        run: python windows/main.py --selftest
+        run: |
+          $env:AMXSB_HOME = "$env:RUNNER_TEMP\amxsb"
+          python windows/main.py --selftest
+          if ($LASTEXITCODE -ne 0) { throw "self-test failed" }
 
       - name: Build the .exe
         run: >
@@ -44,7 +48,6 @@ jobs:
           windows/main.py
 
       - name: Self-test the .exe
-        shell: pwsh
         run: |
           $env:AMXSB_HOME = "$env:RUNNER_TEMP\amxsb-exe"
           $p = Start-Process -FilePath dist\AudioMixerSoundboard.exe -ArgumentList "--selftest" -Wait -PassThru
