@@ -43,7 +43,8 @@ jobs:
         run: >
           pyinstaller --noconfirm --onefile --windowed --name AudioMixerSoundboard
           --icon windows/icon.ico
-          --add-data "windows/ui;ui"
+          --add-data "windows/ui;ui" --add-data "windows/icon.ico;."
+          --hidden-import pystray._win32
           --paths windows --paths .
           --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
           windows/main.py
