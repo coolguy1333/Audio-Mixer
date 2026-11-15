@@ -4,3 +4,5 @@ sounddevice==0.5.2
 miniaudio==1.61
 pywebview==5.4
 pynput==1.8.1
+pystray==0.19.5
+pillow==11.3.0

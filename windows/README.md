@@ -15,7 +15,7 @@ A soundboard for Windows 10 and 11, built from the Linux Audio Mixer's soundboar
 
 ## Install
 
-1. Download `AudioMixerSoundboard.exe`. You can take it from a release (tags `win-v*`) or from the **Windows soundboard** workflow run's artifacts on GitHub Actions.
+1. Download `AudioMixerSoundboard.exe` from the [latest release](https://github.com/coolguy1333/Audio-Mixer/releases) (the `win-v…` ones).
 2. Run it. It's a single file with nothing to install. Windows SmartScreen may warn that the file is unsigned: choose **More info ▸ Run anyway**.
 3. The window needs Microsoft Edge WebView2, which Windows 10/11 already have. If it's missing, the soundboard opens in your web browser instead.
 
@@ -60,7 +60,9 @@ Swap `play` for `stop` or `toggle`; `/api/stopall?t=…` stops everything. Use t
 - Settings and sounds: `%APPDATA%\AudioMixerSoundboard` (`config.json`, `sounds\`, `log.txt`)
 - Downloads: `%LOCALAPPDATA%\AudioMixerSoundboard\cache`
 
-Closing the window quits the app, and hotkeys stop with it.
+## System tray
+
+The soundboard keeps running in the system tray when you close its window, so hotkeys, Stream Deck links and the phone companion keep working. Click the tray icon to bring the window back; right-click it to stop all sounds or quit. Starting the app again also brings the window back. In **⚙ ▸ Background** you can make closing the window quit instead, and turn on **Start with Windows**, which starts it hidden in the tray at login (`--tray`).
 
 ## Build it yourself
 
@@ -69,10 +71,14 @@ py -3.12 -m pip install -r windows\requirements.txt pyinstaller==6.14.1
 ```
 
 ```bat
-pyinstaller --noconfirm --onefile --windowed --name AudioMixerSoundboard --icon windows/icon.ico --add-data "windows/ui;ui" --paths windows --paths . --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 windows/main.py
+pyinstaller --noconfirm --onefile --windowed --name AudioMixerSoundboard --icon windows/icon.ico --add-data "windows/ui;ui" --add-data "windows/icon.ico;." --hidden-import pystray._win32 --paths windows --paths . --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 windows/main.py
 ```
 
 Run from source with `py windows\main.py`; add `--browser` to use your web browser. `--selftest` checks that everything starts and then exits. It also runs on Linux for development (`python3 windows/main.py`).
+
+## Releasing
+
+Bump the version in `windows/VERSION` and push to `main`: the **Windows soundboard** workflow builds and tests the `.exe` and publishes it as release `win-v<version>`. Pushing a `win-v*` tag works too.
 
 ## How it works
 

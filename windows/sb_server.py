@@ -17,6 +17,7 @@ import threading
 import urllib.parse
 
 import sb_audio
+import sb_autostart
 import sb_library
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -52,6 +53,8 @@ class App:
         self.lib, self.engine = lib, engine
         self.hotkeys = None
         self.on_quit = None
+        self.on_show = None
+        self.tray_ok = False
         self.notice = lib.problem
 
     def state(self):
@@ -65,7 +68,9 @@ class App:
         return {"sounds": sounds,
                 "settings": {k: c.get(k) for k in ("volume", "output", "monitor", "monitor_volume", "mic",
                                                    "mic_volume", "web_sounds", "web_source", "lan", "port",
-                                                   "stop_key")},
+                                                   "stop_key", "close_to_tray")},
+                "tray": self.tray_ok, "autostart": sb_autostart.enabled(),
+                "autostart_supported": sb_autostart.supported(),
                 "freesound_key_set": bool(c.get("freesound_key")),
                 "errors": eng.errors, "hotkeys": self.hotkeys.status if self.hotkeys else "unavailable",
                 "preview": eng.preview_playing(), "notice": self.notice,
@@ -85,7 +90,9 @@ class App:
         for k in ("volume", "monitor_volume", "mic_volume"):
             if k in d:
                 c[k] = max(0, min(200, int(d[k])))
-        for k in ("web_sounds", "lan"):
+        if "autostart" in d:
+            sb_autostart.set_enabled(bool(d["autostart"]))
+        for k in ("web_sounds", "lan", "close_to_tray"):
             if k in d:
                 c[k] = bool(d[k])
         if "web_source" in d:
@@ -282,6 +289,10 @@ def make_handler(app):
                 if app.hotkeys:
                     app.hotkeys.reload()
                 return self._send(200, {"ok": ok})
+            if p == "show":
+                if app.on_show:
+                    threading.Thread(target=app.on_show, daemon=True).start()
+                return self._send(200, {"ok": True})
             if p == "quit":
                 self._send(200, {"ok": True})
                 if app.on_quit:

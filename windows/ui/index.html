@@ -171,6 +171,11 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-bottom-wi
       <label class="row"><span class="sub grow">Mic volume</span><input type="range" id="sMicVol" min="0" max="200" style="width:50%"></label>
       <div class="row"><button id="sRescan">Look for new devices</button><span class="sub" id="sDevInfo"></span></div>
     </div>
+    <div class="section"><h3>Background</h3>
+      <label class="row"><input type="checkbox" id="sTray"><span>Keep running in the system tray when I close the window, so hotkeys and Stream Deck links keep working</span></label>
+      <label class="row"><input type="checkbox" id="sAuto"><span>Start with Windows (in the tray)</span></label>
+      <div class="sub" id="sTrayInfo"></div>
+    </div>
     <div class="section"><h3>Hotkeys</h3>
       <div class="sub">Set a hotkey per sound in its ⋯ editor; they work while other apps (games) have focus. Pressing a sound's hotkey again stops it. Status: <span id="sHk"></span></div>
       <div class="row"><span class="sub">Stop all</span><button id="sStopKey">Set hotkey</button><button class="flat" id="sStopKeyClear">Clear</button></div>
@@ -552,6 +557,10 @@ function fillSettings() {
   $("sHk").textContent = S.hotkeys;
   $("sStopKey").textContent = st.stop_key ? hotkeyLabel(st.stop_key) : "Set hotkey";
   $("sWeb").checked = !!st.web_sounds;
+  $("sTray").checked = st.close_to_tray !== false; $("sTray").disabled = !S.tray;
+  $("sAuto").checked = !!S.autostart; $("sAuto").disabled = !S.autostart_supported;
+  $("sTrayInfo").textContent = !S.tray ? "The tray icon isn't available, so closing the window quits." :
+    "Right-click the tray icon to show the window, stop all sounds or quit.";
   $("sTools").textContent = (S.ffmpeg ? "ffmpeg found: every audio format works. " : "ffmpeg not found: MP3, WAV, FLAC and OGG work; install ffmpeg for M4A, Opus and WebM. ") +
     (S.ytdlp ? "yt-dlp found: links to videos (YouTube, TikTok, …) work." : "Install yt-dlp (and ffmpeg) to add the audio of videos from links.");
   $("sUrl").textContent = `${location.origin}/api/play/ID?t=${TOKEN}`;
@@ -567,6 +576,11 @@ $("sRescan").onclick = async () => { $("sDevInfo").textContent = "Looking…"; c
 $("sStopKey").onclick = () => recordHotkey($("sStopKey"), async (c) => { if (c !== undefined) await api("settings", { stop_key: c }); await refresh(); fillSettings(); });
 $("sStopKeyClear").onclick = async () => { await api("settings", { stop_key: null }); await refresh(); fillSettings(); };
 $("sWeb").onchange = (e) => api("settings", { web_sounds: e.target.checked }).then(refresh);
+$("sTray").onchange = (e) => api("settings", { close_to_tray: e.target.checked }).then(refresh);
+$("sAuto").onchange = async (e) => {
+  const r = await api("settings", { autostart: e.target.checked });
+  if (!r.ok) toast(r.error || "Couldn't change it"); await refresh(); fillSettings();
+};
 $("sLan").onchange = (e) => api("settings", { lan: e.target.checked }).then(() => toast("Restart the app to apply"));
 $("sExport").onclick = async () => {
   if (window.pywebview && window.pywebview.api) { const r = await window.pywebview.api.save_export(); if (r && r.ok) toast("Exported to " + r.path); return; }

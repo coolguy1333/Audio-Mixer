@@ -2,13 +2,12 @@
 output (your headphones), and optionally passes a microphone through into the main output, so the people you
 talk to hear your voice and the sounds on one virtual mic."""
 import collections
+import os
 import sys
 import threading
 import time
 
 import numpy as np
-
-import os
 
 try:
     import sounddevice as sd
@@ -48,24 +47,60 @@ def devices(rescan=False):
     return {"outputs": list(dict.fromkeys(outs)), "inputs": list(dict.fromkeys(ins)), "error": None}
 
 
-def _find(name, kind):
-    """Device index by name; None = the system default."""
-    if not name or sd is None:
+def _wasapi():
+    """Index of the WASAPI host API, or None (not Windows, or not available)."""
+    if sys.platform != "win32" or sd is None:
         return None
-    key = "max_output_channels" if kind == "output" else "max_input_channels"
-    for i, d in enumerate(sd.query_devices()):
-        if d["name"] == name and d[key] > 0 and _hostapi_ok(d):
+    for i, h in enumerate(sd.query_hostapis()):
+        if "WASAPI" in h["name"]:
             return i
-    raise LookupError(f"“{name}” isn't connected")
-
-
-def _extra():
-    if sys.platform == "win32" and sd is not None:
-        try:
-            return sd.WasapiSettings(auto_convert=True)     # let Windows resample to the device's rate
-        except TypeError:
-            return None
     return None
+
+
+def _candidates(name, kind):
+    """Ways to open a device, best first: [(device index or None, extra_settings or None)].
+
+    On Windows the first choice is WASAPI with auto_convert, so Windows resamples to the device's rate. The
+    fallback is the same device through another host API (MME resamples by itself). WASAPI settings are only
+    ever given to a WASAPI device: anything else fails with "Incompatible host API specific stream info"."""
+    if sd is None:
+        return []
+    key = "max_output_channels" if kind == "output" else "max_input_channels"
+    default = not name or name == "default"
+    devs = sd.query_devices()
+    w = _wasapi()
+    out = []
+    if w is not None:
+        try:
+            ws = sd.WasapiSettings(auto_convert=True)
+        except TypeError:                        # older sounddevice
+            ws = None
+        if default:
+            idx = sd.query_hostapis(w)["default_output_device" if kind == "output" else "default_input_device"]
+            if idx >= 0:
+                out.append((idx, ws))
+        else:
+            out += [(i, ws) for i, d in enumerate(devs) if d["hostapi"] == w and d["name"] == name and d[key] > 0]
+    if default:
+        out.append((None, None))                 # PortAudio's own default (MME on Windows)
+    else:
+        # other host APIs; MME cuts names to 31 characters
+        out += [(i, None) for i, d in enumerate(devs) if d[key] > 0 and d["hostapi"] != w and
+                (d["name"] == name or (len(d["name"]) >= 20 and name.startswith(d["name"])))]
+    if not out:
+        raise LookupError(f"“{name}” isn't connected")
+    return out
+
+
+def _open(name, kind, make):
+    """make(device, extra_settings) -> started stream. Tries each candidate until one opens."""
+    err = None
+    for idx, extra in _candidates(name, kind):
+        try:
+            return make(idx, extra)
+        except Exception as e:                   # PortAudioError, ValueError (bad channel count), …
+            err = e
+    raise err
 
 
 class Voice:
@@ -85,11 +120,12 @@ class Output:
         self.progress = {}                # sid -> [fraction, …], written by the callback
         self.error = None
         self.stream = None
-        idx = _find(name, "output")
-        kw = {"extra_settings": _extra()} if _extra() is not None else {}
-        self.stream = sd.OutputStream(samplerate=RATE, channels=2, dtype="float32", blocksize=BLOCK,
-                                      latency="low", device=idx, callback=self._cb, **kw)
-        self.stream.start()
+        def make(idx, extra):
+            st = sd.OutputStream(samplerate=RATE, channels=2, dtype="float32", blocksize=BLOCK, latency="low",
+                                 device=idx, callback=self._cb, extra_settings=extra)
+            st.start()
+            return st
+        self.stream = _open(name, "output", make)
 
     def _cb(self, out, frames, _time, status):
         while self.cmds:
@@ -144,15 +180,14 @@ class MicPassthrough:
         self.buf = collections.deque()
         self.frames = 0
         self.lock = threading.Lock()
-        idx = _find(name, "input")
-        ch = 1
-        if sd is not None:
+        def make(idx, extra):
             info = sd.query_devices(idx if idx is not None else sd.default.device[0])
             ch = 2 if info["max_input_channels"] >= 2 else 1
-        kw = {"extra_settings": _extra()} if _extra() is not None else {}
-        self.stream = sd.InputStream(samplerate=RATE, channels=ch, dtype="float32", blocksize=BLOCK,
-                                     latency="low", device=idx, callback=self._cb, **kw)
-        self.stream.start()
+            st = sd.InputStream(samplerate=RATE, channels=ch, dtype="float32", blocksize=BLOCK, latency="low",
+                                device=idx, callback=self._cb, extra_settings=extra)
+            st.start()
+            return st
+        self.stream = _open(name, "input", make)
 
     def _cb(self, data, frames, _time, status):
         block = np.repeat(data, 2, axis=1) if data.shape[1] == 1 else data[:, :2]

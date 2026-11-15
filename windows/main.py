@@ -2,6 +2,7 @@
 
     AudioMixerSoundboard.exe            open the app window
     AudioMixerSoundboard.exe --browser  use the default web browser instead of the app window
+    AudioMixerSoundboard.exe --tray     start hidden in the system tray (used by "Start with Windows")
     AudioMixerSoundboard.exe --selftest check that everything starts, then exit (used by the build)
 """
 import io
@@ -24,9 +25,11 @@ for p in (HERE, os.path.dirname(HERE)):
 
 import amx_sounds as snd  # noqa: E402
 import sb_audio  # noqa: E402
+import sb_autostart  # noqa: E402
 import sb_hotkeys  # noqa: E402
 import sb_library  # noqa: E402
 import sb_server  # noqa: E402
+import sb_tray  # noqa: E402
 
 TITLE = "Audio Mixer Soundboard"
 
@@ -98,7 +101,9 @@ def selftest(base, token):
     except urllib.error.HTTPError as e:
         assert e.code == 401
     print("devices:", json.dumps(sb_audio.devices()))
-    print("hotkeys:", st["hotkeys"], "| ffmpeg:", st["ffmpeg"], "| yt-dlp:", st["ytdlp"])
+    print("hotkeys:", st["hotkeys"], "| ffmpeg:", st["ffmpeg"], "| yt-dlp:", st["ytdlp"],
+          "| tray:", "available" if sb_tray.pystray is not None else "missing",
+          "| autostart:", "supported" if sb_autostart.supported() else "n/a")
     print("SELFTEST OK")
 
 
@@ -108,30 +113,29 @@ def main(argv):
     snd.CACHE = os.path.join(lib.cache, "web")
     port = int(lib.cfg.get("port") or 8788)
     test = "--selftest" in argv
-    if not test and _running(port):                     # already open: show it again instead of a 2nd engine
-        _open_ui(f"http://127.0.0.1:{port}/", "--browser" in argv, None)
+    browser = "--browser" in argv
+    if not test and _running(port):
+        # already running (maybe hidden in the tray): bring that window back instead of starting a 2nd engine
+        try:
+            _api(f"http://127.0.0.1:{port}", lib.cfg["token"], "/api/show", data={})
+        except Exception:
+            _open_ui_plain(f"http://127.0.0.1:{port}/")
         return 0
+    if sb_autostart.enabled():
+        try:
+            sb_autostart.set_enabled(True)           # keep the login entry pointing at this copy of the .exe
+        except OSError:
+            pass
     engine = sb_audio.Engine(lib)
     app = sb_server.App(lib, engine)
     app.hotkeys = sb_hotkeys.Hotkeys(lib, engine, lambda fn: threading.Thread(target=fn, daemon=True).start())
     srv, port = sb_server.serve(app, 0 if test else port)
     base = f"http://127.0.0.1:{port}"
-    done = threading.Event()
-
-    def quit_app():
-        done.set()
-        if app.window is not None:
-            try:
-                app.window.destroy()
-            except Exception:
-                pass
-    app.window = None
-    app.on_quit = quit_app
     try:
         if test:
             selftest(base, lib.cfg["token"])
             return 0
-        _open_ui(base + "/", "--browser" in argv, app, done)
+        Shell(app, base + "/", browser, start_hidden="--tray" in argv).run()
         return 0
     except Exception:
         traceback.print_exc()
@@ -143,45 +147,107 @@ def main(argv):
         srv.server_close()
 
 
-def _open_ui(url, browser, app, done=None):
-    if not browser:
+def _open_ui_plain(url):
+    import webbrowser
+    webbrowser.open(url)
+
+
+class Shell:
+    """The app window (pywebview) or the browser, plus the tray icon. With the tray on, closing the window
+    hides it and the soundboard keeps running (hotkeys, Stream Deck links); Quit is in the tray menu."""
+
+    def __init__(self, app, url, browser, start_hidden=False):
+        self.app, self.url, self.browser = app, url, browser
+        self.start_hidden = start_hidden
+        self.window = None
+        self.quitting = False
+        self.done = threading.Event()
+        self.told = False
+        app.on_quit = self.quit
+        app.on_show = self.show
+        app.window = None
+        self.tray = sb_tray.Tray(TITLE, self.show, app.engine.stop_all, self.quit)
+        app.tray_ok = self.tray.ok
+
+    def run(self):
+        try:
+            if not self.browser and self._run_window():
+                return
+            if not (self.start_hidden and self.tray.ok):
+                _open_ui_plain(self.url)
+            try:
+                while not self.done.wait(0.5):
+                    pass
+            except KeyboardInterrupt:
+                pass
+        finally:
+            self.tray.stop()
+
+    def _run_window(self):
         try:
             import webview
         except Exception:
-            webview = None
-        if webview is not None:
-            class Api:
-                def save_export(self):
-                    r = app.window.create_file_dialog(webview.SAVE_DIALOG, save_filename="soundboard.zip",
-                                                      file_types=("Soundboard (*.zip)",))
-                    path = r[0] if isinstance(r, (list, tuple)) else r
-                    if not path:
-                        return {"ok": False}
-                    app.lib.export_zip(path)
-                    return {"ok": True, "path": path}
+            return False
+        app = self.app
 
-                def open_folder(self):
-                    if sys.platform == "win32":
-                        os.startfile(app.lib.home)   # noqa: S606
-                    return True
-            try:
-                w = webview.create_window(TITLE, url, width=1180, height=780, min_size=(560, 420),
-                                          background_color="#1d1d1f", js_api=Api() if app else None)
-                if app:
-                    app.window = w
-                # Edge WebView2 only: older engines can't run the page, the browser is better then
-                webview.start(gui="edgechromium" if sys.platform == "win32" else None)
-                return
-            except Exception:
-                traceback.print_exc()           # no WebView2 runtime, …: fall back to the browser
-    import webbrowser
-    webbrowser.open(url)
-    if done is not None:
+        class Api:
+            def save_export(self_):
+                r = self.window.create_file_dialog(webview.SAVE_DIALOG, save_filename="soundboard.zip",
+                                                   file_types=("Soundboard (*.zip)",))
+                path = r[0] if isinstance(r, (list, tuple)) else r
+                if not path:
+                    return {"ok": False}
+                app.lib.export_zip(path)
+                return {"ok": True, "path": path}
+
+            def open_folder(self_):
+                if sys.platform == "win32":
+                    os.startfile(app.lib.home)   # noqa: S606
+                return True
         try:
-            while not done.wait(0.5):
+            self.window = webview.create_window(TITLE, self.url, width=1180, height=780, min_size=(560, 420),
+                                                background_color="#1d1d1f", js_api=Api(),
+                                                hidden=self.start_hidden and self.tray.ok)
+            app.window = self.window
+            self.window.events.closing += self._closing
+            # Edge WebView2 only: older engines can't run the page; the browser is better then
+            webview.start(gui="edgechromium" if sys.platform == "win32" else None)
+            return True
+        except Exception:
+            traceback.print_exc()                    # no WebView2 runtime, …: fall back to the browser
+            self.window = app.window = None
+            return False
+
+    def _closing(self):
+        """Closing the window: hide it to the tray instead, unless quitting or the tray is off/unavailable."""
+        if self.quitting or not self.tray.ok or not self.app.lib.cfg.get("close_to_tray", True):
+            self.quitting = True
+            return True
+        threading.Timer(0.05, self.window.hide).start()   # not from inside the close handler
+        if not self.told:
+            self.told = True
+            self.tray.notify("Still running in the tray, so hotkeys keep working. Right-click the icon to quit.")
+        return False
+
+    def show(self):
+        if self.window is not None:
+            try:
+                self.window.show()
+                self.window.restore()
+            except Exception:
                 pass
-        except KeyboardInterrupt:
-            pass
+        else:
+            _open_ui_plain(self.url)
+
+    def quit(self):
+        self.quitting = True
+        self.done.set()
+        if self.window is not None:
+            try:
+                self.window.destroy()
+            except Exception:
+                pass
+        self.tray.stop()
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write          # only used to attach the .exe to a release on a win-v* tag
+  contents: write          # only used to publish the .exe as a release
 
 jobs:
   build:
@@ -43,7 +43,8 @@ jobs:
         run: >
           pyinstaller --noconfirm --onefile --windowed --name AudioMixerSoundboard
           --icon windows/icon.ico
-          --add-data "windows/ui;ui"
+          --add-data "windows/ui;ui" --add-data "windows/icon.ico;."
+          --hidden-import pystray._win32
           --paths windows --paths .
           --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
           windows/main.py
@@ -60,6 +61,18 @@ jobs:
         with:
           name: AudioMixerSoundboard-windows
           path: dist/AudioMixerSoundboard.exe
+
+      - name: Publish a release when windows/VERSION is new
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/claude/'))
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = (Get-Content windows/VERSION -Raw).Trim()
+          $tag = "win-v$v"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) { Write-Output "Release $tag already exists; bump windows/VERSION to publish a new one."; exit 0 }
+          gh release create $tag dist/AudioMixerSoundboard.exe --target $env:GITHUB_SHA --title "Audio Mixer Soundboard $v for Windows" --notes-file windows/RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) { throw "release failed" }
 
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/win-v')

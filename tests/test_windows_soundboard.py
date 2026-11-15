@@ -9,6 +9,7 @@ import struct
 import sys
 import tempfile
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 import wave
@@ -92,6 +93,10 @@ class Library(Base):
         self.assertEqual(len(again.sounds), 1)
         self.assertEqual(again.cfg["token"], self.lib.cfg["token"])
 
+    def test_key_is_saved_on_first_run(self):
+        again = self.L.Library()                      # nothing was changed in between
+        self.assertEqual(again.cfg["token"], self.lib.cfg["token"])
+
     def test_broken_config_is_kept(self):
         with open(self.lib.conf_path, "w") as f:
             f.write("{broken")
@@ -127,6 +132,110 @@ class Hotkeys(unittest.TestCase):
         self.assertEqual(hk.to_pynput([], "F13"), "<f13>")
         self.assertEqual(hk.to_pynput(["Shift"], "A"), "<shift>+a")
         self.assertIsNone(hk.to_pynput(["Control"], "Control"))
+
+
+class FakeWasapi:
+    def __init__(self, auto_convert=False):
+        self.auto_convert = auto_convert
+
+
+class FakeSD:
+    """PortAudio as Windows shows it: MME (index 0, the PortAudio default) and WASAPI (index 1)."""
+    WasapiSettings = FakeWasapi
+
+    def __init__(self, wasapi_works=True):
+        self.wasapi_works = wasapi_works
+        self.opened = []
+        self.default = type("D", (), {"device": [3, 0]})()
+
+    def query_hostapis(self, i=None):
+        apis = [{"name": "MME", "default_output_device": 0, "default_input_device": 3},
+                {"name": "Windows WASAPI", "default_output_device": 4, "default_input_device": 6}]
+        return apis if i is None else apis[i]
+
+    def query_devices(self, i=None):
+        d = [{"name": "Microsoft Sound Mapper - Output", "hostapi": 0, "max_output_channels": 2, "max_input_channels": 0},
+             {"name": "CABLE Input (VB-Audio Virtual C", "hostapi": 0, "max_output_channels": 8, "max_input_channels": 0},
+             {"name": "Speakers (Realtek(R) Audio)", "hostapi": 0, "max_output_channels": 2, "max_input_channels": 0},
+             {"name": "Microphone (USB Mic)", "hostapi": 0, "max_output_channels": 0, "max_input_channels": 1},
+             {"name": "Speakers (Realtek(R) Audio)", "hostapi": 1, "max_output_channels": 2, "max_input_channels": 0},
+             {"name": "CABLE Input (VB-Audio Virtual Cable)", "hostapi": 1, "max_output_channels": 2, "max_input_channels": 0},
+             {"name": "Microphone (USB Mic)", "hostapi": 1, "max_output_channels": 0, "max_input_channels": 1}]
+        return d if i is None else d[i]
+
+    def _stream(self, device=None, extra_settings=None, channels=2, **kw):
+        host = self.query_devices(device if device is not None else 0)["hostapi"]
+        if extra_settings is not None and host != 1:          # what real PortAudio does (-9984)
+            raise RuntimeError("Incompatible host API specific stream info [PaErrorCode -9984]")
+        if host == 1 and not self.wasapi_works:
+            raise RuntimeError("Invalid sample rate")
+        self.opened.append((device, type(extra_settings).__name__, channels))
+        return type("S", (), {"start": lambda s: None, "stop": lambda s: None, "close": lambda s: None})()
+
+    OutputStream = InputStream = _stream
+
+
+@unittest.skipUnless(HAVE, "numpy not installed")
+class DeviceChoice(unittest.TestCase):
+    """The PaErrorCode -9984 bug: WASAPI settings must only go to WASAPI devices."""
+
+    def setUp(self):
+        import sb_audio
+        self.A = sb_audio
+        self.p1 = unittest.mock.patch.object(sb_audio, "sys", type("S", (), {"platform": "win32"})())
+        self.p1.start()
+        self.addCleanup(self.p1.stop)
+
+    def use(self, fake):
+        p = unittest.mock.patch.object(self.A, "sd", fake)
+        p.start()
+        self.addCleanup(p.stop)
+        return fake
+
+    def test_default_output_uses_wasapi_default(self):
+        sd = self.use(FakeSD())
+        self.A.Output(None)
+        self.assertEqual(sd.opened, [(4, "FakeWasapi", 2)])
+
+    def test_named_and_default_mic(self):
+        sd = self.use(FakeSD())
+        self.A.Output("CABLE Input (VB-Audio Virtual Cable)")
+        self.A.MicPassthrough("default")
+        self.A.MicPassthrough("Microphone (USB Mic)")
+        self.assertEqual(sd.opened, [(5, "FakeWasapi", 2), (6, "FakeWasapi", 1), (6, "FakeWasapi", 1)])
+
+    def test_falls_back_to_mme_without_wasapi_settings(self):
+        sd = self.use(FakeSD(wasapi_works=False))
+        self.A.Output(None)
+        self.A.Output("CABLE Input (VB-Audio Virtual Cable)")          # MME cuts the name to 31 characters
+        self.assertEqual(sd.opened, [(None, "NoneType", 2), (1, "NoneType", 2)])
+
+    def test_unknown_device(self):
+        self.use(FakeSD())
+        with self.assertRaisesRegex(LookupError, "isn't connected"):
+            self.A.Output("Gone (USB)")
+
+    def test_engine_has_no_error_with_defaults(self):
+        self.use(FakeSD())
+        os.environ["AMXSB_HOME"] = tempfile.mkdtemp()
+        import sb_library
+        lib = sb_library.Library()
+        lib.cfg.update(monitor="default", mic="default", output=None)
+        eng = self.A.Engine(lib)
+        self.assertEqual(eng.errors, {})
+
+
+class TrayAndAutostart(unittest.TestCase):
+    def test_modules_degrade_gracefully(self):
+        import sb_autostart
+        import sb_tray
+        self.assertTrue(sb_tray.icon_path().endswith("icon.ico"))
+        self.assertTrue(os.path.exists(sb_tray.icon_path()))
+        self.assertIn("--tray", sb_autostart.command())
+        if not sb_autostart.supported():
+            self.assertFalse(sb_autostart.enabled())
+            with self.assertRaises(OSError):
+                sb_autostart.set_enabled(True)
 
 
 @unittest.skipUnless(HAVE, "numpy not installed")
@@ -196,6 +305,18 @@ class Server(Base):
         r = self.call("/api/web/search", {"source": 4, "q": "not a link"})
         self.assertFalse(r["ok"])
         self.assertIn("https://", r["error"])
+
+    def test_show_and_tray_settings(self):
+        shown = []
+        self.app.on_show = lambda: shown.append(1)
+        self.assertTrue(self.call("/api/show", {})["ok"])
+        self.call("/api/settings", {"close_to_tray": False})
+        st = self.call("/api/state")
+        self.assertIs(st["settings"]["close_to_tray"], False)
+        self.assertIn("autostart_supported", st)
+        import time
+        time.sleep(0.2)
+        self.assertEqual(shown, [1])
 
     def test_settings_and_quit(self):
         self.call("/api/settings", {"volume": 999, "monitor_volume": 50})

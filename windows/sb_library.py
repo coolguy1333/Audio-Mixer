@@ -103,7 +103,7 @@ class Library:
 
     DEFAULTS = {"volume": 100, "output": None, "monitor": None, "monitor_volume": 100, "mic": None,
                 "mic_volume": 100, "web_sounds": False, "web_source": 0, "freesound_key": "",
-                "lan": False, "port": 8788, "stop_key": None}
+                "lan": False, "port": 8788, "stop_key": None, "close_to_tray": True}
 
     def __init__(self):
         self.home, self.cache = data_dirs()
@@ -139,6 +139,7 @@ class Library:
         for k, v in self.DEFAULTS.items():
             cfg.setdefault(k, v)
         cfg.setdefault("sounds", [])
+        new_token = "token" not in cfg
         cfg.setdefault("token", secrets.token_urlsafe(16))
         for s in cfg["sounds"]:
             s.setdefault("start", 0.0)
@@ -146,14 +147,19 @@ class Library:
             s.setdefault("vol", 100)
             s.setdefault("hotkey", None)
             s.setdefault("color", None)
+        if new_token:            # keep the key stable from the first run: Stream Deck links depend on it
+            self._save(cfg)
         return cfg
 
     def save(self):
         with self.lock:
-            tmp = self.conf_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.cfg, f, indent=2)
-            os.replace(tmp, self.conf_path)
+            self._save(self.cfg)
+
+    def _save(self, cfg):
+        tmp = self.conf_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        os.replace(tmp, self.conf_path)
 
     @property
     def sounds(self):
