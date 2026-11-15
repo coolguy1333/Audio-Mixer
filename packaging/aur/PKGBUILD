@@ -20,7 +20,8 @@ depends=(
 makedepends=('git' 'gcc')
 optdepends=(
   'pipewire-pulse: PulseAudio compatibility (required on PipeWire systems)'
-  'ffmpeg: soundboard formats other than 16-bit WAV'
+  'ffmpeg: soundboard formats other than 16-bit WAV, and previews of online sounds'
+  'yt-dlp: add the audio of a video (YouTube, TikTok, SoundCloud, ...) to the soundboard'
   'fluidsynth: MIDI instrument channels'
   'nvidia-utils: NVIDIA GPU stats on the deck'
   'opendeck: control the mixer from a real Stream Deck'
@@ -45,7 +46,7 @@ package() {
   cd "$_pkgname"
   local dest="$pkgdir/usr/share/$_pkgname"
 
-  install -Dm644 -t "$dest" audio_mixer.py amx_effects.py amx_extras.py
+  install -Dm644 -t "$dest" audio_mixer.py amx_effects.py amx_extras.py amx_sounds.py
   chmod 755 "$dest/audio_mixer.py"
   install -Dm644 -t "$dest/fx" fx/amx_fx.c
   install -Dm755 -t "$dest/fx" fx/amx_fx.so

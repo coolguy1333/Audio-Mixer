@@ -2571,6 +2571,14 @@ def _glyph(cr, kind, cx, cy, s, color):
 class DeckKey(Gtk.DrawingArea):
     SIZE = 100
 
+    def popover(self):
+        """This key's popover, made once and reused. Unparenting a popover soon after it closes crashes
+        GTK 4.14 later (gdk_surface_request_motion), so it stays attached until the key is destroyed."""
+        if self._pop is None:
+            self._pop = Gtk.Popover()
+            self._pop.set_parent(self)
+        return self._pop
+
     def __init__(self, deck, r, c, scalable=False):
         super().__init__()
         self.deck, self.r, self.c = deck, r, c
@@ -2587,6 +2595,8 @@ class DeckKey(Gtk.DrawingArea):
             self.set_content_height(self.SIZE)
         self.set_draw_func(self._draw)
         self.set_cursor_from_name("pointer")
+        self._pop = None
+        self.connect("destroy", lambda w: w._pop and (w._pop.unparent(), setattr(w, "_pop", None)))
         click = Gtk.GestureClick(button=0)
         click.connect("pressed", self._pressed)
         click.connect("released", self._released)
@@ -3015,9 +3025,7 @@ class DeckView(Gtk.Box):
         self.refresh(self.app.control.state())
 
     def show_unlock(self, widget):
-        pop = Gtk.Popover()
-        pop.set_parent(widget)
-        pop.connect("closed", lambda *_: GLib.idle_add(pop.unparent))
+        pop = widget.popover()
         b = Gtk.Button(margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
         b.set_child(pill_button("changes-allow-symbolic", "Unlock deck"))
         b.connect("clicked", lambda *_: (pop.popdown(), self.on_unlock and self.on_unlock()))
@@ -3267,9 +3275,7 @@ class DeckView(Gtk.Box):
     def edit_key(self, widget):
         r, c = widget.r, widget.c
         cfg = self.app.eng.cfg
-        pop = Gtk.Popover()
-        pop.set_parent(widget)
-        pop.connect("closed", lambda *_: GLib.idle_add(pop.unparent))
+        pop = widget.popover()
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=12,
                       margin_bottom=12, margin_start=12, margin_end=12, width_request=330)
         pop.set_child(box)
@@ -5070,12 +5076,14 @@ class App(Adw.Application):
         q.connect("activate", lambda *_: self.shutdown())
         self.add_action(q)
         self.hold()
+        try:                                    # GLib 2.86+ moved this to GLibUnix
+            gi.require_version("GLibUnix", "2.0")
+            from gi.repository import GLibUnix
+            add_signal = GLibUnix.signal_add
+        except (ImportError, ValueError, AttributeError):
+            add_signal = GLib.unix_signal_add
         for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                from gi.repository import GLibUnix
-                GLibUnix.signal_add(GLib.PRIORITY_DEFAULT, sig, self.shutdown)
-            except ImportError:
-                GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, self.shutdown)
+            add_signal(GLib.PRIORITY_DEFAULT, sig, self.shutdown)
 
     def do_activate(self):
         if not self.win:
