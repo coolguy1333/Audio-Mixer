@@ -3632,6 +3632,7 @@ class MixerWindow(Adw.ApplicationWindow):
         self.stack.add_named(self._build_apps_page(), "apps")
         self.soundboard_page = ext.SoundboardPage(self, app.board)
         self.soundboards.append(self.soundboard_page)
+        ext.stop_all_shortcut(self, app.board, lambda: self.stack.get_visible_child_name() == "soundboard")
         self.stack.add_named(self.soundboard_page, "soundboard")
         self.settings_page = ext.SettingsPage(self)
         self.stack.add_named(self.settings_page, "settings")
@@ -3843,8 +3844,6 @@ class MixerWindow(Adw.ApplicationWindow):
             return
         page = ext.SoundboardPage(self, self.app.board, popped=True)
         page.add_css_class("deck-popout")
-        stop = Gtk.Button(icon_name="media-playback-stop-symbolic", tooltip_text="Stop all sounds")
-        stop.connect("clicked", lambda *_: self.app.board.stop_all())
 
         def closed():
             if page in self.soundboards:
@@ -3852,11 +3851,12 @@ class MixerWindow(Adw.ApplicationWindow):
             self._sb_win = None
         self.soundboards.append(page)
         w, _title, unlock = self._popout_window(
-            "soundboard_window", self.SOUNDBOARD_WIN_TITLE, "Soundboard", page, size=(520, 340), start=(stop,),
+            "soundboard_window", self.SOUNDBOARD_WIN_TITLE, "Soundboard", page, size=(520, 340),
             lock_tip="Lock: hide this bar and fix the size; pads still play (right-click to unlock)",
             on_lock=lambda locked: setattr(page, "locked", locked), on_close=closed)
         self._sb_win = w
         page.on_unlock = unlock
+        ext.stop_all_shortcut(w, self.app.board)
 
     def toggle_soundboard_window(self):
         if self._sb_win is not None:

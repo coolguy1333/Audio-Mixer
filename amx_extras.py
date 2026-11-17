@@ -565,6 +565,20 @@ class Waveform(Gtk.DrawingArea):
             cr.fill()
 
 
+def stop_all_shortcut(window, board, when=None):
+    """Esc in this window stops every soundboard sound (only while when() is true, if given).
+    Focused widgets see the key first, so Esc still closes popovers and dialogs."""
+    def act(*_):
+        if when is not None and not when():
+            return False
+        board.stop_all()
+        return True
+    sc = Gtk.ShortcutController()
+    sc.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("Escape"),
+                                 action=Gtk.CallbackAction.new(act)))
+    window.add_controller(sc)
+
+
 class SoundboardPage(Gtk.Box):
     """The Soundboard page, or (popped=True) just its pads, for the pop-out window."""
 
@@ -591,7 +605,8 @@ class SoundboardPage(Gtk.Box):
             return
         top = Gtk.Box(spacing=10)
         top.append(Gtk.Label(label="Soundboard", xalign=0, hexpand=True, css_classes=["page-title"]))
-        stop = Gtk.Button(css_classes=["destructive-action"], valign=Gtk.Align.CENTER)
+        stop = Gtk.Button(css_classes=["destructive-action"], valign=Gtk.Align.CENTER,
+                          tooltip_text="Stop every sound (Esc)")
         stop.set_child(Gtk.Label(label="Stop all"))
         stop.connect("clicked", lambda *_: board.stop_all())
         add = Gtk.Button(css_classes=["suggested-action"], valign=Gtk.Align.CENTER)
@@ -750,6 +765,11 @@ class SoundboardPage(Gtk.Box):
                                        "No sounds yet. Drop audio files here, use “+ Add sounds”, or "
                                        "“Find sounds online”.", css_classes=["sub"], margin_top=12 if self.popped else 40))
             return
+        if self.popped:                      # stays reachable when the window is locked (no header bar)
+            stop = Gtk.Button(css_classes=["destructive-action"], tooltip_text="Stop every sound (Esc)")
+            stop.set_child(Gtk.Label(label="■  Stop all"))
+            stop.connect("clicked", lambda *_: self.board.stop_all())
+            self.flow.append(stop)
         for s in sounds:
             self.flow.append(self.mini_pad(s) if self.popped else self.pad(s))
 
