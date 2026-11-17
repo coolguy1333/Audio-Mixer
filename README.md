@@ -10,6 +10,7 @@ No special hardware needed.
 - **Virtual Stream Deck**: pages of keys for mute, volume, routing, system stats (CPU/GPU/RAM/network/disk), media control, launching apps, websites and commands. Icons, images and colours are customizable. It can pop out into a resizable, lockable, always-on-top window.
 - **System tray**: closing the window keeps the mixer running in the tray.
 - **OpenDeck plugin** (`opendeck/`): control the mixer from a real Stream Deck through [OpenDeck](https://github.com/nekename/OpenDeck).
+- **Windows:** the soundboard also comes as a standalone Windows app (`windows/`, see [windows/README.md](windows/README.md)). The rest of the mixer needs PipeWire and is Linux-only.
 
 Audio passes through untouched. At 100% faders with no effects on, the signal is bit-identical; the graph stays at the server's sample rate in 32-bit float. The added delay is about 9 ms (5 ms loopback buffers). Change it under **Settings ▸ Latency** (3 ms buffers give about 4 ms but run PipeWire at a 1 ms period).
 

@@ -1,0 +1,81 @@
+name: Windows soundboard
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["win-v*"]           # tag pushes ignore the paths filter
+    paths: ["windows/**", "amx_sounds.py", "tests/**", ".github/workflows/windows.yml"]
+  pull_request:
+    paths: ["windows/**", "amx_sounds.py", "tests/**", ".github/workflows/windows.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write          # only used to publish the .exe as a release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r windows/requirements.txt pyinstaller==6.14.1
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Self-test from source
+        run: |
+          $env:AMXSB_HOME = "$env:RUNNER_TEMP\amxsb"
+          python windows/main.py --selftest
+          if ($LASTEXITCODE -ne 0) { throw "self-test failed" }
+
+      - name: Build the .exe
+        run: >
+          pyinstaller --noconfirm --onefile --windowed --name AudioMixerSoundboard
+          --icon windows/icon.ico
+          --add-data "windows/ui;ui" --add-data "windows/icon.ico;."
+          --hidden-import pystray._win32
+          --paths windows --paths .
+          --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
+          windows/main.py
+
+      - name: Self-test the .exe
+        run: |
+          $env:AMXSB_HOME = "$env:RUNNER_TEMP\amxsb-exe"
+          $p = Start-Process -FilePath dist\AudioMixerSoundboard.exe -ArgumentList "--selftest" -Wait -PassThru
+          Get-Content "$env:AMXSB_HOME\log.txt"
+          if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
+          if (-not (Select-String -Path "$env:AMXSB_HOME\log.txt" -Pattern "SELFTEST OK" -Quiet)) { throw "no SELFTEST OK" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AudioMixerSoundboard-windows
+          path: dist/AudioMixerSoundboard.exe
+
+      - name: Publish a release when windows/VERSION is new
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/claude/'))
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = (Get-Content windows/VERSION -Raw).Trim()
+          $tag = "win-v$v"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) { Write-Output "Release $tag already exists; bump windows/VERSION to publish a new one."; exit 0 }
+          gh release create $tag dist/AudioMixerSoundboard.exe --target $env:GITHUB_SHA --title "Audio Mixer Soundboard $v for Windows" --notes-file windows/RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) { throw "release failed" }
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/win-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/AudioMixerSoundboard.exe --title "Windows soundboard ${{ github.ref_name }}" --notes "Download AudioMixerSoundboard.exe and run it. See windows/README.md." || gh release upload "${{ github.ref_name }}" dist/AudioMixerSoundboard.exe --clobber

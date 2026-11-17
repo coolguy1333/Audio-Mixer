@@ -1,0 +1,8 @@
+# Windows soundboard (windows/main.py). Exact versions keep the .exe build reproducible.
+numpy==2.2.6
+sounddevice==0.5.2
+miniaudio==1.61
+pywebview==5.4
+pynput==1.8.1
+pystray==0.19.5
+pillow==11.3.0

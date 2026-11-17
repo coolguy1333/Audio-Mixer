@@ -24,6 +24,7 @@ UA_API = "AudioMixer/1.0 (+https://github.com/coolguy1333/Audio-Mixer)"
 UA_WEB = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
 MYINSTANTS = "https://www.myinstants.com"
 FREESOUND_KEY_URL = "https://freesound.org/apiv2/apply"
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)     # Windows: no console window flashing up
 
 
 class SourceError(Exception):
@@ -229,7 +230,7 @@ def find_audio_in_page(doc, base):
 def _ytdlp_title(url):
     try:
         r = subprocess.run(["yt-dlp", "--no-playlist", "--skip-download", "--no-warnings", "--print", "title",
-                            "--", url], capture_output=True, text=True, timeout=60)
+                            "--", url], capture_output=True, text=True, timeout=60, creationflags=_NO_WINDOW)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return r.stdout.strip().splitlines()[0] if r.returncode == 0 and r.stdout.strip() else None
@@ -300,7 +301,7 @@ def fetch(url):
                                 "-f", "bestaudio/best", "-x", "--audio-format", "mp3",
                                 "--max-filesize", str(MAX_BYTES * 4), "--match-filter", "duration <? 1200",
                                 "-o", stem + ".%(ext)s", "--", page],
-                               capture_output=True, text=True, timeout=600)
+                               capture_output=True, text=True, timeout=600, creationflags=_NO_WINDOW)
         except subprocess.TimeoutExpired:
             raise SourceError("The download took too long.") from None
         if "does not pass filter" in r.stdout:

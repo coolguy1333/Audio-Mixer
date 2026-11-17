@@ -206,6 +206,7 @@ def _import_extras():
     return amx_extras
 
 
+@unittest.skipIf(sys.platform == "win32", "the Linux mixer's soundboard")
 class NoDuplicates(unittest.TestCase):
     def setUp(self):
         self.ext = _import_extras()
