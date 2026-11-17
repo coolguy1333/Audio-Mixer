@@ -630,7 +630,8 @@ class SoundboardPage(Gtk.Box):
         top.append(add)
         self.append(top)
         self.append(Gtk.Label(
-            label="Click a pad to play it (again to layer another copy); right-click or ⋯ to trim it. Drop audio "
+            label="Click a pad to play it (again to layer another copy); right-click or ⋯ to trim it. Esc stops "
+                  "every sound. Drop audio "
                   "files here to add them. Each sound "
                   "has a 4-digit id for Stream Deck buttons and the command line: "
                   f"{ctl_hint()} play <id>.", xalign=0, wrap=True, css_classes=["sub"]))
@@ -765,18 +766,14 @@ class SoundboardPage(Gtk.Box):
                                        "No sounds yet. Drop audio files here, use “+ Add sounds”, or "
                                        "“Find sounds online”.", css_classes=["sub"], margin_top=12 if self.popped else 40))
             return
-        if self.popped:                      # stays reachable when the window is locked (no header bar)
-            stop = Gtk.Button(css_classes=["destructive-action"], tooltip_text="Stop every sound (Esc)")
-            stop.set_child(Gtk.Label(label="■  Stop all"))
-            stop.connect("clicked", lambda *_: self.board.stop_all())
-            self.flow.append(stop)
         for s in sounds:
             self.flow.append(self.mini_pad(s) if self.popped else self.pad(s))
 
     def mini_pad(self, s):
         """A pop-out pad: name and waveform. Click plays (again to layer); right-click stops it."""
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, css_classes=["cell", "sb-pad"],
-                       tooltip_text=f"{s['name']}  ·  {s['id']}\nClick to play (again to layer), right-click to stop")
+                       tooltip_text=f"{s['name']}  ·  {s['id']}\nClick to play (again to layer), right-click to stop.\n"
+                                    "Esc stops every sound.")
         card.set_size_request(110, -1)
         card.append(Gtk.Label(label=s["name"], xalign=0, ellipsize=3, css_classes=["chname"]))
         w = Waveform(self.board, s, height=28)

@@ -3850,13 +3850,15 @@ class MixerWindow(Adw.ApplicationWindow):
                 self.soundboards.remove(page)
             self._sb_win = None
         self.soundboards.append(page)
-        w, _title, unlock = self._popout_window(
+        w, title, unlock = self._popout_window(
             "soundboard_window", self.SOUNDBOARD_WIN_TITLE, "Soundboard", page, size=(520, 340),
-            lock_tip="Lock: hide this bar and fix the size; pads still play (right-click to unlock)",
+            lock_tip="Lock: hide this bar and fix the size; pads still play and Esc still stops them "
+                     "(right-click to unlock)",
             on_lock=lambda locked: setattr(page, "locked", locked), on_close=closed)
         self._sb_win = w
         page.on_unlock = unlock
         ext.stop_all_shortcut(w, self.app.board)
+        title.set_subtitle("Esc stops all sounds")
 
     def toggle_soundboard_window(self):
         if self._sb_win is not None:
