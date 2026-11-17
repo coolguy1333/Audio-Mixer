@@ -1424,10 +1424,12 @@ class Tray:
     Left click toggles the window; the right-click menu has Show / Quit.
     """
 
-    MENU = [(1, "Show mixer"), (4, "Show / hide deck"), (2, None), (3, "Quit mixer (stops routing)")]
+    MENU = [(1, "Show mixer"), (4, "Show / hide deck"), (5, "Show / hide soundboard"), (2, None),
+            (3, "Quit mixer (stops routing)")]
 
-    def __init__(self, on_toggle, on_show, on_quit, on_deck=None):
+    def __init__(self, on_toggle, on_show, on_quit, on_deck=None, on_soundboard=None):
         self.on_toggle, self.on_show, self.on_quit, self.on_deck = on_toggle, on_show, on_quit, on_deck
+        self.on_soundboard = on_soundboard
         self.ok = False
         self.conn = None
         self.name = f"org.kde.StatusNotifierItem-{os.getpid()}-1"
@@ -1535,6 +1537,8 @@ class Tray:
             GLib.idle_add(lambda: self.on_quit() and False)
         elif item_id == 4 and self.on_deck:
             GLib.idle_add(lambda: self.on_deck() and False)
+        elif item_id == 5 and self.on_soundboard:
+            GLib.idle_add(lambda: self.on_soundboard() and False)
 
     def _menu_get(self, conn, sender, path, iface, prop):
         return {"Version": GLib.Variant("u", 3), "TextDirection": GLib.Variant("s", "ltr"),
@@ -3568,6 +3572,7 @@ class MixerWindow(Adw.ApplicationWindow):
         self._sigs = {}
         self._dialog_open = False
         self.decks, self._deck_win, self._deck_n = [], None, 0
+        self.soundboards, self._sb_win = [], None
         self.stats, self.media = SysStats(), Media()
 
         tv = Adw.ToolbarView()
@@ -3626,6 +3631,7 @@ class MixerWindow(Adw.ApplicationWindow):
         self.stack.add_named(self._build_deck_page(), "deck")
         self.stack.add_named(self._build_apps_page(), "apps")
         self.soundboard_page = ext.SoundboardPage(self, app.board)
+        self.soundboards.append(self.soundboard_page)
         self.stack.add_named(self.soundboard_page, "soundboard")
         self.settings_page = ext.SettingsPage(self)
         self.stack.add_named(self.settings_page, "settings")
@@ -3694,57 +3700,44 @@ class MixerWindow(Adw.ApplicationWindow):
         return page
 
     DECK_WIN_TITLE = "Audio Mixer Deck"
+    SOUNDBOARD_WIN_TITLE = "Audio Mixer Soundboard"
 
-    def open_deck_window(self):
-        """Pop the keys out into their own resizable, lockable, optionally always-on-top window.
-        It stays out of the taskbar; the tray menu has "Show / hide deck"."""
-        if self._deck_win is not None:
-            self._deck_win.present()
-            return
-        ws = self.cfg.setdefault("deck_window", {})
-        width, height = ws.get("width", 560), ws.get("height", 380)
+    def _popout_window(self, cfg_key, win_title, label, content, size=(560, 380), start=(), lock_tip="",
+                       on_lock=None, on_close=None):
+        """A small resizable, lockable, optionally always-on-top window that stays out of the taskbar
+        (the deck and the soundboard pop-outs). Its size, pin and lock live in cfg[cfg_key].
+        Returns (window, title widget, unlock function)."""
+        ws = self.cfg.setdefault(cfg_key, {})
+        dw, dh = size
+        width, height = ws.get("width", dw), ws.get("height", dh)
         if ws.get("locked"):                       # opening locked: no header, so no header height
             height = max(48, height - ws.get("header_h", 46))
-        w = Adw.Window(title=self.DECK_WIN_TITLE, default_width=width, default_height=height)
+        w = Adw.Window(title=win_title, default_width=width, default_height=height)
         w.set_size_request(48, 48)     # libadwaita's default minimum is 360x200; let it go much smaller
         tv = Adw.ToolbarView()
         hb = Adw.HeaderBar(css_classes=["flat"], decoration_layout=":close")   # compact, so it can get small
-        title = Adw.WindowTitle(title="Deck")
+        title = Adw.WindowTitle(title=label)
         hb.set_title_widget(title)
-        deck = DeckView(self.app, self, popped=True)
-        prev = Gtk.Button(icon_name="go-previous-symbolic", tooltip_text="Previous page")
-        prev.connect("clicked", lambda *_: deck.go(deck.d["page"] - 1))
-        nxt = Gtk.Button(icon_name="go-next-symbolic", tooltip_text="Next page")
-        nxt.connect("clicked", lambda *_: deck.go(deck.d["page"] + 1))
-        hb.pack_start(prev)
-        hb.pack_start(nxt)
+        for b in start:
+            hb.pack_start(b)
         pin = Gtk.ToggleButton(icon_name="view-pin-symbolic", tooltip_text="Always on top",
                                active=bool(ws.get("on_top")))
-        lock = Gtk.Button(icon_name="changes-prevent-symbolic",
-                          tooltip_text="Lock: hide this bar, fix the size and stop editing; keys "
-                                       "still work (right-click a key to unlock)")
+        lock = Gtk.Button(icon_name="changes-prevent-symbolic", tooltip_text=lock_tip)
         hb.pack_end(lock)
         hb.pack_end(pin)
         tv.add_top_bar(hb)
-        tv.set_content(deck)
+        tv.set_content(content)
         w.set_content(tv)
-        self.decks.append(deck)
-        self._deck_win = w
-
-        def show_page():
-            title.set_subtitle(f"{deck.page()['name']}  ·  {deck.d['page'] + 1}/{len(deck.d['pages'])}")
-        deck.on_page = show_page
-        show_page()
 
         def kwin_rules():
-            """Keep the deck out of the taskbar / pager / Alt+Tab, and apply always-on-top."""
-            kwin_window_flags(self.DECK_WIN_TITLE, skip_taskbar=True, keep_above=bool(ws.get("on_top")))
+            """Keep the window out of the taskbar / pager / Alt+Tab, and apply always-on-top."""
+            kwin_window_flags(win_title, skip_taskbar=True, keep_above=bool(ws.get("on_top")))
             return False
 
         def set_on_top(on):
             ws["on_top"] = on
             self.changed()
-            if not kwin_window_flags(self.DECK_WIN_TITLE, skip_taskbar=True, keep_above=on) and on:
+            if not kwin_window_flags(win_title, skip_taskbar=True, keep_above=on) and on:
                 self.toast("Always on top needs KDE Plasma (KWin)")
                 pin.set_active(False)
                 return
@@ -3753,9 +3746,9 @@ class MixerWindow(Adw.ApplicationWindow):
         def remember_size(*_):
             """While unlocked, keep track of the window's size (it's restored after unlocking)."""
             if not ws.get("locked") and w.get_mapped():
-                dw, dh = w.get_default_size()
-                if dw > 0 and dh > 0:
-                    ws["width"], ws["height"] = dw, dh
+                cw, ch = w.get_default_size()
+                if cw > 0 and ch > 0:
+                    ws["width"], ws["height"] = cw, ch
                 if hb.get_parent() is not None and hb.get_height() > 0:
                     ws["header_h"] = hb.get_height()
         w.connect("notify::default-width", remember_size)
@@ -3765,7 +3758,8 @@ class MixerWindow(Adw.ApplicationWindow):
             if locked:
                 remember_size()
             ws["locked"] = locked
-            deck.locked = locked
+            if on_lock:
+                on_lock(locked)
             if locked:
                 had_header = hb.get_parent() is not None
                 if had_header:
@@ -3779,11 +3773,10 @@ class MixerWindow(Adw.ApplicationWindow):
                 if hb.get_parent() is None:
                     tv.add_top_bar(hb)
                 # GTK re-measures when a window becomes resizable again; put the old size back
-                GLib.timeout_add(150, lambda: (w.set_default_size(ws.get("width", 560),
-                                                                  ws.get("height", 380)), False)[1])
+                GLib.timeout_add(150, lambda: (w.set_default_size(ws.get("width", dw),
+                                                                  ws.get("height", dh)), False)[1])
             self.changed()
             GLib.timeout_add(400, kwin_rules)    # re-assert after the window's decorations change
-        deck.on_unlock = lambda: set_locked(False)
         pin.connect("toggled", lambda b: set_on_top(b.get_active()))
         lock.connect("clicked", lambda *_: set_locked(True))
 
@@ -3791,26 +3784,89 @@ class MixerWindow(Adw.ApplicationWindow):
             remember_size()                   # (no-op while locked: the unlocked size is kept)
             ws["open"] = False
             self.changed()
-            if deck in self.decks:
-                self.decks.remove(deck)
-            self._deck_win = None
+            if on_close:
+                on_close()
             return False
         w.connect("close-request", closed)
         ws["open"] = True
         self.changed()
         if ws.get("locked"):
-            deck.locked = True
+            if on_lock:
+                on_lock(True)
             tv.remove(hb)
             w.set_resizable(False)
         w.present()
         GLib.timeout_add(300, kwin_rules)
         GLib.timeout_add(1200, kwin_rules)       # once more, in case the window mapped late
+        return w, title, lambda: set_locked(False)
+
+    def open_deck_window(self):
+        """Pop the keys out into their own resizable, lockable, optionally always-on-top window.
+        It stays out of the taskbar; the tray menu has "Show / hide deck"."""
+        if self._deck_win is not None:
+            self._deck_win.present()
+            return
+        deck = DeckView(self.app, self, popped=True)
+        prev = Gtk.Button(icon_name="go-previous-symbolic", tooltip_text="Previous page")
+        prev.connect("clicked", lambda *_: deck.go(deck.d["page"] - 1))
+        nxt = Gtk.Button(icon_name="go-next-symbolic", tooltip_text="Next page")
+        nxt.connect("clicked", lambda *_: deck.go(deck.d["page"] + 1))
+
+        def closed():
+            if deck in self.decks:
+                self.decks.remove(deck)
+            self._deck_win = None
+        self.decks.append(deck)
+        w, title, unlock = self._popout_window(
+            "deck_window", self.DECK_WIN_TITLE, "Deck", deck, start=(prev, nxt),
+            lock_tip="Lock: hide this bar, fix the size and stop editing; keys still work "
+                     "(right-click a key to unlock)",
+            on_lock=lambda locked: setattr(deck, "locked", locked), on_close=closed)
+        self._deck_win = w
+        deck.on_unlock = unlock
+
+        def show_page():
+            title.set_subtitle(f"{deck.page()['name']}  ·  {deck.d['page'] + 1}/{len(deck.d['pages'])}")
+        deck.on_page = show_page
+        show_page()
 
     def toggle_deck_window(self):
         if self._deck_win is not None:
             self._deck_win.close()
         else:
             self.open_deck_window()
+
+    def open_soundboard_window(self):
+        """Just the soundboard pads, in a small window like the deck's pop-out."""
+        if self._sb_win is not None:
+            self._sb_win.present()
+            return
+        page = ext.SoundboardPage(self, self.app.board, popped=True)
+        page.add_css_class("deck-popout")
+        stop = Gtk.Button(icon_name="media-playback-stop-symbolic", tooltip_text="Stop all sounds")
+        stop.connect("clicked", lambda *_: self.app.board.stop_all())
+
+        def closed():
+            if page in self.soundboards:
+                self.soundboards.remove(page)
+            self._sb_win = None
+        self.soundboards.append(page)
+        w, _title, unlock = self._popout_window(
+            "soundboard_window", self.SOUNDBOARD_WIN_TITLE, "Soundboard", page, size=(520, 340), start=(stop,),
+            lock_tip="Lock: hide this bar and fix the size; pads still play (right-click to unlock)",
+            on_lock=lambda locked: setattr(page, "locked", locked), on_close=closed)
+        self._sb_win = w
+        page.on_unlock = unlock
+
+    def toggle_soundboard_window(self):
+        if self._sb_win is not None:
+            self._sb_win.close()
+        else:
+            self.open_soundboard_window()
+
+    def rebuild_soundboards(self):
+        for p in self.soundboards:
+            p.rebuild()
 
     # ---- effects, profiles, tools
     def apply_fx(self):
@@ -3850,7 +3906,7 @@ class MixerWindow(Adw.ApplicationWindow):
         normalize_deck(self.cfg)
         self.structure_changed()
         self.deck_layout_changed()
-        self.soundboard_page.rebuild()
+        self.rebuild_soundboards()
         self.toast("Configuration imported")
 
     def open_rack_window(self, obj):
@@ -5109,8 +5165,11 @@ class App(Adw.Application):
                                  and False)
             if (cfg.get("deck_window") or {}).get("open"):
                 GLib.idle_add(lambda: (self.win.open_deck_window(), False)[1])
+            if (cfg.get("soundboard_window") or {}).get("open"):
+                GLib.idle_add(lambda: (self.win.open_soundboard_window(), False)[1])
             self.tray = Tray(self.toggle_window, self.show_window, self.shutdown,
-                             lambda: self.win and self.win.toggle_deck_window())
+                             lambda: self.win and self.win.toggle_deck_window(),
+                             lambda: self.win and self.win.toggle_soundboard_window())
             self.tray.start()
             self.control.start()
             cc = cfg.get("companion") or {}

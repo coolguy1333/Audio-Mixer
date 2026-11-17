@@ -566,10 +566,29 @@ class Waveform(Gtk.DrawingArea):
 
 
 class SoundboardPage(Gtk.Box):
-    def __init__(self, win, board):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=8, margin_bottom=16,
-                         margin_start=20, margin_end=20)
-        self.win, self.board = win, board
+    """The Soundboard page, or (popped=True) just its pads, for the pop-out window."""
+
+    def __init__(self, win, board, popped=False):
+        m = 0 if popped else 20       # (pop-out: the margin goes inside, so the dark background fills the window)
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=0 if popped else 8,
+                         margin_bottom=0 if popped else 16, margin_start=m, margin_end=m)
+        self.win, self.board, self.popped = win, board, popped
+        self.locked, self.on_unlock = False, None
+        self.waves = []
+        if popped:              # pop-out window: nothing but the pads
+            sw = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+            self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True, margin_top=8,
+                                    margin_bottom=8, margin_start=8, margin_end=8, max_children_per_line=16, min_children_per_line=1, row_spacing=6,
+                                    column_spacing=6, valign=Gtk.Align.START)
+            sw.set_child(self.flow)
+            self.append(sw)
+            unlock = Gtk.GestureClick(button=3)      # locked window has no header: right-click anywhere unlocks
+            unlock.connect("pressed", lambda *_: self.locked and self.on_unlock and self.on_unlock())
+            self.add_controller(unlock)
+            self.rebuild()
+            board.preload(board.board["sounds"], lambda _sid: self.redraw_all())
+            GLib.timeout_add(60, self._tick)
+            return
         top = Gtk.Box(spacing=10)
         top.append(Gtk.Label(label="Soundboard", xalign=0, hexpand=True, css_classes=["page-title"]))
         stop = Gtk.Button(css_classes=["destructive-action"], valign=Gtk.Align.CENTER)
@@ -584,6 +603,13 @@ class SoundboardPage(Gtk.Box):
                                            "a link")
         self.web.set_child(Gtk.Label(label="Find sounds online"))
         self.web.connect("clicked", lambda *_: self.open_web())
+        pop = Gtk.Button(valign=Gtk.Align.CENTER, tooltip_text="Open just the pads in their own small window")
+        prow = Gtk.Box(spacing=6)
+        prow.append(Gtk.Image(icon_name="window-new-symbolic"))
+        prow.append(Gtk.Label(label="Pop out"))
+        pop.set_child(prow)
+        pop.connect("clicked", lambda *_: win.open_soundboard_window())
+        top.append(pop)
         top.append(stop)
         top.append(self.web)
         top.append(add)
@@ -601,13 +627,25 @@ class SoundboardPage(Gtk.Box):
                                 valign=Gtk.Align.START)
         sw.set_child(self.flow)
         self.append(sw)
-        self.waves = []
         drop = Gtk.DropTarget.new(Gdk.FileList, Gdk.DragAction.COPY)     # drag audio files onto the page
         drop.connect("drop", self._drop)
         self.add_controller(drop)
         self.rebuild()
-        board.preload(board.board["sounds"], lambda _sid: [w.queue_draw() for w in self.waves])
+        board.preload(board.board["sounds"], lambda _sid: self.redraw_all())
         GLib.timeout_add(60, self._tick)
+
+    def pages(self):
+        """Every soundboard view that's open (this page and the pop-out), so a change shows in all of them."""
+        return getattr(self.win, "soundboards", None) or [self]
+
+    def rebuild_all(self):
+        for p in self.pages():
+            p.rebuild()
+
+    def redraw_all(self):
+        for p in self.pages():
+            for w in p.waves:
+                w.queue_draw()
 
     def _tick(self):
         if self.get_mapped() and (self.board.playing or self._was_playing):
@@ -640,8 +678,8 @@ class SoundboardPage(Gtk.Box):
             self.win.toast(f"Already on the board: {sk[0][:40]}" + (f" and {len(sk) - 1} more" if len(sk) > 1 else ""))
         if added:
             self.win.changed()
-            self.rebuild()
-            self.board.preload(added, lambda _sid: [w.queue_draw() for w in self.waves])
+            self.rebuild_all()
+            self.board.preload(added, lambda _sid: self.redraw_all())
         return added
 
     def build_routing(self):
@@ -702,16 +740,35 @@ class SoundboardPage(Gtk.Box):
             r.append(box)
 
     def rebuild(self):
-        self.build_routing()
+        if not self.popped:
+            self.build_routing()
         _clear(self.flow)
         self.waves = []
         sounds = self.board.board["sounds"]
         if not sounds:
-            self.flow.append(Gtk.Label(label="No sounds yet. Drop audio files here, use “+ Add sounds”, or "
-                                             "“Find sounds online”.", css_classes=["sub"], margin_top=40))
+            self.flow.append(Gtk.Label(label="No sounds yet." if self.popped else
+                                       "No sounds yet. Drop audio files here, use “+ Add sounds”, or "
+                                       "“Find sounds online”.", css_classes=["sub"], margin_top=12 if self.popped else 40))
             return
         for s in sounds:
-            self.flow.append(self.pad(s))
+            self.flow.append(self.mini_pad(s) if self.popped else self.pad(s))
+
+    def mini_pad(self, s):
+        """A pop-out pad: name and waveform. Click plays (again to layer); right-click stops it."""
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, css_classes=["cell", "sb-pad"],
+                       tooltip_text=f"{s['name']}  ·  {s['id']}\nClick to play (again to layer), right-click to stop")
+        card.set_size_request(110, -1)
+        card.append(Gtk.Label(label=s["name"], xalign=0, ellipsize=3, css_classes=["chname"]))
+        w = Waveform(self.board, s, height=28)
+        self.waves.append(w)
+        card.append(w)
+        g1 = Gtk.GestureClick(button=1)
+        g1.connect("released", lambda *_: self.board.play(s["id"]) or self.win.toast("Couldn't play that file"))
+        card.add_controller(g1)
+        g3 = Gtk.GestureClick(button=3)
+        g3.connect("pressed", lambda *_: self.locked or self.board.stop(s["id"]))   # (locked: right-click unlocks)
+        card.add_controller(g3)
+        return card
 
     def pad(self, s):
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, css_classes=["cell", "sb-pad"])
@@ -803,7 +860,7 @@ class SoundboardPage(Gtk.Box):
         close.connect("clicked", lambda *_: dlg.close())
         bottom.append(close)
         box.append(bottom)
-        dlg.connect("closed", lambda *_: (GLib.source_remove(t), self.rebuild()))
+        dlg.connect("closed", lambda *_: (GLib.source_remove(t), self.rebuild_all()))
         dlg.present(self.win)
         if not self.board.duration(s):
             self.board.preload([s], lambda _i: (wave.queue_draw(), upd_info()))
@@ -1657,7 +1714,7 @@ class SettingsPage(Gtk.Box):
                 self.win.toast("That file isn't a soundboard export")
                 return
             self.win.changed()
-            self.win.soundboard_page.rebuild()
+            self.win.soundboard_page.rebuild_all()
             sk = len(self.win.app.board.skipped)
             self.win.toast(f"Imported {n} sound{'s' if n != 1 else ''}" +
                            (f" ({sk} already on the board)" if sk else ""))
