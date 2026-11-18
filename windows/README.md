@@ -15,7 +15,7 @@ A soundboard for Windows 10 and 11, built from the Linux Audio Mixer's soundboar
 
 ## Install
 
-1. Download `AudioMixerSoundboard.exe` from the [latest release](https://github.com/coolguy1333/Audio-Mixer/releases) (the `win-v…` ones).
+1. Download `AudioMixerSoundboard.exe` from the [latest release](https://github.com/coolguy1333/Audio-Mixer/releases/latest).
 2. Run it. It's a single file with nothing to install. Windows SmartScreen may warn that the file is unsigned: choose **More info ▸ Run anyway**.
 3. The window needs Microsoft Edge WebView2, which Windows 10/11 already have. If it's missing, the soundboard opens in your web browser instead.
 
@@ -78,7 +78,7 @@ Run from source with `py windows\main.py`; add `--browser` to use your web brows
 
 ## Releasing
 
-Bump the version in `windows/VERSION` and push to `main`: the **Windows soundboard** workflow builds and tests the `.exe` and publishes it as release `win-v<version>`. Pushing a `win-v*` tag works too.
+Releases cover both apps: see "Releasing" in the main [README](../README.md).
 
 ## How it works
 

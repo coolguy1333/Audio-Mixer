@@ -102,6 +102,20 @@ Arch / CachyOS: `sudo pacman -S python-gobject gtk4 libadwaita python-cairo libp
 
 Ubuntu 24.04: `sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 pipewire-pulse pulseaudio-utils gcc ffmpeg fluidsynth`, then run `python3 audio_mixer.py`. Ubuntu doesn't package rnnoise, so noise suppression is off there; everything else works.
 
+## Install (any distro)
+
+Download `audio-mixer-<version>-linux.tar.gz` from the [latest release](https://github.com/coolguy1333/Audio-Mixer/releases/latest), then:
+
+```sh
+tar xzf audio-mixer-*-linux.tar.gz
+```
+
+```sh
+./audio-mixer-*-linux/install.sh
+```
+
+It installs for your user only (no root): the app in `~/.local/share/audio-mixer`, the `audio-mixer` command in `~/.local/bin`, a menu entry and the icon. If something from **Requirements** is missing, it says what to install. `uninstall.sh` removes it again and keeps your settings and sounds. On Windows, download `AudioMixerSoundboard.exe` from the same release (see [windows/README.md](windows/README.md)).
+
 ## Install (Arch / CachyOS)
 
 From the AUR (`audio-mixer-git`):
@@ -143,6 +157,10 @@ sh opendeck/install.sh
 ```
 
 Restart OpenDeck afterwards. The plugin talks to the mixer through a local socket at `$XDG_RUNTIME_DIR/audio-mixer.sock`, which takes JSON lines. The protocol is documented in `ControlServer` in `audio_mixer.py`.
+
+## Releasing
+
+Change the version in `VERSION` and push to `main`. The **Release** workflow then tests and builds the Linux download (`packaging/linux/make-tarball.sh`, which it also installs and runs) and the Windows `.exe`, and publishes both as release `v<version>`, using `RELEASE_NOTES.md` as the text. Pushing without changing `VERSION` publishes nothing.
 
 ## Development
 
