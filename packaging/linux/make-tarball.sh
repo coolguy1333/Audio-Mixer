@@ -7,7 +7,7 @@ name="audio-mixer-$v-linux"
 out="dist/$name"
 rm -rf "$out" "dist/$name.tar.gz"
 mkdir -p "$out/fx" "$out/packaging"
-cp audio_mixer.py amx_effects.py amx_extras.py amx_sounds.py README.md LICENSE "$out/"
+cp audio_mixer.py amx_*.py README.md LICENSE "$out/"          # every amx_ module, so none can be left out
 cp fx/amx_fx.c "$out/fx/"
 cp -r web assets opendeck "$out/"
 cp packaging/io.github.lawsonf.AudioMixer.desktop "$out/packaging/"
