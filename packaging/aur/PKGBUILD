@@ -46,7 +46,7 @@ package() {
   cd "$_pkgname"
   local dest="$pkgdir/usr/share/$_pkgname"
 
-  install -Dm644 -t "$dest" audio_mixer.py amx_effects.py amx_extras.py amx_sounds.py
+  install -Dm644 -t "$dest" audio_mixer.py amx_effects.py amx_extras.py amx_sounds.py amx_games.py
   chmod 755 "$dest/audio_mixer.py"
   install -Dm644 -t "$dest/fx" fx/amx_fx.c
   install -Dm755 -t "$dest/fx" fx/amx_fx.so

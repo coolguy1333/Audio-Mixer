@@ -18,7 +18,7 @@ jobs:
       - name: Lint (errors only)
         run: ruff check --select F,E9,PLE --line-length 200 .
       - name: Byte-compile
-        run: python3 -m py_compile audio_mixer.py amx_effects.py amx_extras.py amx_sounds.py windows/*.py
+        run: python3 -m py_compile audio_mixer.py amx_effects.py amx_extras.py amx_sounds.py amx_games.py windows/*.py
       - name: Build the effects plugin
         run: gcc -O2 -Wall -fPIC -shared -o fx/amx_fx.so fx/amx_fx.c -DAMX_NO_RNNOISE -lm
       - name: Unit tests

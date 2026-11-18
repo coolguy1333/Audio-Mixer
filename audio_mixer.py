@@ -35,6 +35,7 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk  # noqa: 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import amx_effects as fxm  # noqa: E402
 import amx_extras as ext  # noqa: E402
+import amx_games  # noqa: E402
 
 APP_ID = "io.github.lawsonf.AudioMixer"
 CONF = os.environ.get("AMX_CONFIG") or os.path.join(
@@ -440,6 +441,7 @@ class Engine:
         self.cleanup_stale()
         self.fx = fxm.FxHost()
         self.fx_src = {}      # fid -> source name of a running effect chain
+        self.games = amx_games.Detector()      # auto-routes games to a channel with auto_games on
         self.instruments = ext.Instruments()   # FluidSynth per channel with a MIDI instrument
 
     def cleanup_stale(self):
@@ -458,6 +460,7 @@ class Engine:
         self.default_sink = info.get("default_sink_name")
         self.default_source = info.get("default_source_name")
         self.input_by_mod = {}
+        need_clients = False
         for i in self.inputs:
             om = i.get("owner_module")
             if om not in (None, "", "n/a"):
@@ -465,6 +468,12 @@ class Engine:
                     self.input_by_mod[int(om)] = i
                 except ValueError:
                     pass
+            elif not (i.get("properties") or {}).get("application.process.id"):
+                need_clients = True
+        # PipeWire-native apps keep their process id and binary on the client, not the stream
+        self.client_props = ({str(c.get("index")): c.get("properties") or {}
+                              for c in pactl("list", "clients", js=True) or []}
+                             if need_clients else {})
 
     @property
     def hw_sinks(self):
@@ -477,11 +486,18 @@ class Engine:
 
     def apps(self):
         sink_name = {s["index"]: s["name"] for s in self.sinks}
+        clients = getattr(self, "client_props", {})
         out = []
         for i in self.inputs:
             if i.get("owner_module") not in (None, "", "n/a"):
                 continue
             p = i.get("properties") or {}
+            if not p.get("application.process.id"):
+                cp = clients.get(str(i.get("client"))) or {}
+                p = {**p, "application.process.id": cp.get("application.process.id")
+                     or cp.get("pipewire.sec.pid"),
+                     "application.process.binary": p.get("application.process.binary")
+                     or cp.get("application.process.binary")}
             if (p.get("application.name") or "").startswith("amx-") or \
                     p.get("application.process.id") in self.instruments.pids():   # our soundboard / synths
                 continue
@@ -490,12 +506,14 @@ class Engine:
                         "media": p.get("media.name") or "",
                         "sink": sink_name.get(i.get("sink"), ""),
                         "paused": bool(i.get("corked")),
+                        "pid": p.get("application.process.id") or "",
                         "binary": (p.get("application.process.binary") or "").lower()})
         return sorted(out, key=lambda a: (a["name"].lower(), a["idx"]))
 
     # ---- running desktop apps (anything with a launcher, whether or not it makes sound)
     _INTERPRETERS = ("python", "bash", "sh", "java", "node", "env", "electron")
     _desk_cache = (0.0, {})
+    _desk_games = frozenset()   # lowercase binaries + names of launchers with Categories=Game
 
     def _desktop_index(self):
         """{binary basename (lowercase): display name} from installed .desktop launchers."""
@@ -507,7 +525,7 @@ class Engine:
                 f"{home}/.local/share/applications",
                 "/var/lib/flatpak/exports/share/applications",
                 f"{home}/.local/share/flatpak/exports/share/applications"]
-        idx = {}
+        idx, games = {}, set()
         for d in dirs:
             try:
                 files = [f for f in os.listdir(d) if f.endswith(".desktop")]
@@ -516,7 +534,7 @@ class Engine:
             for f in files:
                 try:
                     name = exe = None
-                    skip = False
+                    skip = is_game = False
                     with open(os.path.join(d, f), encoding="utf-8", errors="replace") as fh:
                         in_entry = False
                         for line in fh:
@@ -531,6 +549,8 @@ class Engine:
                                     name = v
                                 elif k == "Exec" and exe is None:
                                     exe = v
+                                elif k == "Categories":
+                                    is_game = "Game" in v.split(";")
                                 elif k in ("NoDisplay", "Hidden", "Terminal") and v.lower() == "true":
                                     skip = True
                                 elif k == "Type" and v != "Application":
@@ -542,10 +562,19 @@ class Engine:
                         toks = [t for t in toks[1:] if not t.startswith("-")]
                     if toks:
                         idx.setdefault(os.path.basename(toks[0]).lower(), name)
+                        if is_game:
+                            games.update((os.path.basename(toks[0]).lower(), name.lower()))
                 except OSError:
                     continue
         Engine._desk_cache = (time.time(), idx)
+        Engine._desk_games = frozenset(games)
         return idx
+
+    def is_game(self, app):
+        """Whether a sound stream (from apps()) comes from a game; see amx_games."""
+        self._desktop_index()
+        return self.games.is_game(app.get("pid"), app.get("binary", ""), app.get("name", ""),
+                                  self._desk_games)
 
     def installed_apps(self):
         """Display names of every installed desktop app."""
@@ -1094,15 +1123,20 @@ class Engine:
                     rules.append((self.rule_keys(a), f"amx_ch_{ch['id']}"))
         system = self._system_sink(sink_names)
         bypass = {b.lower() for b in self.cfg.get("bypass", [])}
-        if not rules and not system:
+        games = next((f"amx_ch_{ch['id']}" for ch in self.cfg["channels"]
+                      if ch["type"] == "virtual" and ch.get("auto_games") and not ch.get("system")), None)
+        if not rules and not system and not games:
             return
-        for app in self.apps():
+        apps = self.apps()
+        if games:
+            self.games.forget_others(a["pid"] for a in apps)
+        for app in apps:
             ids = {app["name"].lower(), app["binary"]} - {""}
             tgt = next((t for keys, t in rules if ids & keys), None)
             if tgt is None:
                 if ids & bypass:
                     continue
-                tgt = system
+                tgt = games if games and self.is_game(app) else system
             if tgt and tgt in sink_names and app["sink"] != tgt:
                 pactl("move-sink-input", app["idx"], tgt)
 
@@ -1169,6 +1203,12 @@ def normalize(cfg):
             if "mic" in m["name"].lower() and "mic" not in m["outputs"]:
                 m["outputs"].append("mic")
         cfg["_vmic_init"] = True
+    if not cfg.get("_games_init"):           # once: the channel named Games picks up games automatically
+        for c in cfg["channels"]:
+            if c["type"] == "virtual" and c["name"].lower() == "games" and not c.get("system"):
+                c["auto_games"] = True
+                break
+        cfg["_games_init"] = True
     if not any(c.get("system") for c in cfg["channels"]):
         for c in cfg["channels"]:
             if c["type"] == "virtual" and c["name"].lower() == "system":
@@ -4627,14 +4667,41 @@ class MixerWindow(Adw.ApplicationWindow):
                 page, lst = list_page("", "")
                 addb, pop, pbox = popover_button("list-add-symbolic", "Add app")
                 page.append(addb)
+                glst = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["boxed-list"])
+                grow = Adw.SwitchRow(
+                    title="Auto-add games",
+                    subtitle="Games from Steam, Proton, Wine, Lutris, Heroic and other launchers play "
+                             "here unless you assigned them somewhere else",
+                    active=bool(obj.get("auto_games")))
+
+                def set_auto_games(row, _p):
+                    on = row.get_active()
+                    if on:
+                        for c in cfg["channels"]:
+                            c["auto_games"] = False
+                    obj["auto_games"] = on
+                    self.changed()
+                    eng.reconcile()
+                    fill_apps()
+                grow.connect("notify::active", set_auto_games)
+                glst.append(grow)
+                page.prepend(glst)
 
                 def fill_apps():
                     clear(lst)
-                    if not obj["apps"]:
+                    live = eng.apps()
+                    mine = {x.lower() for x in obj["apps"]}
+                    auto = [a for a in live if obj.get("auto_games") and a["sink"] == f"amx_ch_{obj['id']}"
+                            and a["name"].lower() not in mine and eng.is_game(a)]
+                    if not obj["apps"] and not auto:
                         lst.append(Adw.ActionRow(
                             title="No apps",
                             subtitle="Add an app and it will always play through this channel"))
-                    running = {a["name"].lower() for a in eng.apps()}
+                    for a in auto:
+                        lst.append(Adw.ActionRow(
+                            title=GLib.markup_escape_text(a["name"]),
+                            subtitle="Detected as a game · " + ("paused" if a["paused"] else "playing")))
+                    running = {a["name"].lower() for a in live}
                     for a in list(obj["apps"]):
                         r = Adw.ActionRow(
                             title=GLib.markup_escape_text(a),
@@ -5206,10 +5273,12 @@ class App(Adw.Application):
                     print("SNAP saved", w.get_width(), w.get_height(), flush=True)
                 GLib.timeout_add(int(os.environ.get("AMX_DEBUG_WINSNAP_MS", 2500)),
                                  lambda: snap() and False)
-            dbg = os.environ.get("AMX_DEBUG_DIALOG")  # testing aid: open a dialog on start
-            if dbg in ("mix", "chan"):
-                GLib.timeout_add(1500, lambda: self.win.open_dialog(
-                    dbg, cfg["mixes"][0] if dbg == "mix" else cfg["channels"][2]) and False)
+            dbg = os.environ.get("AMX_DEBUG_DIALOG")  # testing aid: open a dialog on start ("chan:0")
+            if dbg and dbg.split(":")[0] in ("mix", "chan"):
+                kind, _, n = dbg.partition(":")
+                objs = cfg["mixes"] if kind == "mix" else cfg["channels"]
+                obj = objs[int(n)] if n else (cfg["mixes"][0] if kind == "mix" else cfg["channels"][2])
+                GLib.timeout_add(1500, lambda: self.win.open_dialog(kind, obj) and False)
             if self.start_hidden:           # first launch only; launching again opens the window
                 self.start_hidden = False
                 return
