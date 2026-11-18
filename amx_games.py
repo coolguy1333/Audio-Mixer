@@ -20,7 +20,10 @@ LAUNCHER_NAMES = WINE_NAMES | {"reaper", "pressure-vessel-wrap", "pv-bwrap", "lu
                                "legendary", "gogdl", "bottles", "umu-run", "gamescope"}
 # Never games, even when their parent is a launcher (Steam's own UI, launcher front-ends).
 NOT_GAMES = {"steam", "steamwebhelper", "steam-runtime-launcher-service", "lutris", "heroic",
-             "bottles", "gamescope", "mangohud", "discord", "obs"}
+             "bottles", "gamescope", "mangohud", "discord", "obs",
+             # tools Steam launches (they get a SteamAppId too): SteamVR's runtime
+             "vrserver", "vrcompositor", "vrmonitor", "vrdashboard", "vrwebhelper", "vrstartup",
+             "vrstartup.sh", "steamvr"}
 
 MAX_DEPTH = 32
 

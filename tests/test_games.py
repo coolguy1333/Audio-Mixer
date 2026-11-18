@@ -64,6 +64,12 @@ class Detection(unittest.TestCase):
         self.assertFalse(self.d.is_game(40, "steam", "Steam"))
         self.assertFalse(self.d.is_game(41, "steamwebhelper", "Steam"))
 
+    def test_steamvr_is_not_a_game(self):
+        self.p.add(45, "vrserver", 10, env={"SteamAppId": "250820"})
+        self.p.add(46, "vrcompositor", 10, env={"SteamAppId": "250820"})
+        self.assertFalse(self.d.is_game(45, "vrserver", "vrserver"))
+        self.assertFalse(self.d.is_game(46, "vrcompositor", "SteamVR"))
+
     def test_child_of_reaper_is_a_game(self):
         self.p.add(50, "steam", 10)
         self.p.add(51, "reaper", 50)

@@ -5273,10 +5273,12 @@ class App(Adw.Application):
                     print("SNAP saved", w.get_width(), w.get_height(), flush=True)
                 GLib.timeout_add(int(os.environ.get("AMX_DEBUG_WINSNAP_MS", 2500)),
                                  lambda: snap() and False)
-            dbg = os.environ.get("AMX_DEBUG_DIALOG")  # testing aid: open a dialog on start
-            if dbg in ("mix", "chan"):
-                GLib.timeout_add(1500, lambda: self.win.open_dialog(
-                    dbg, cfg["mixes"][0] if dbg == "mix" else cfg["channels"][2]) and False)
+            dbg = os.environ.get("AMX_DEBUG_DIALOG")  # testing aid: open a dialog on start ("chan:0")
+            if dbg and dbg.split(":")[0] in ("mix", "chan"):
+                kind, _, n = dbg.partition(":")
+                objs = cfg["mixes"] if kind == "mix" else cfg["channels"]
+                obj = objs[int(n)] if n else (cfg["mixes"][0] if kind == "mix" else cfg["channels"][2])
+                GLib.timeout_add(1500, lambda: self.win.open_dialog(kind, obj) and False)
             if self.start_hidden:           # first launch only; launching again opens the window
                 self.start_hidden = False
                 return
