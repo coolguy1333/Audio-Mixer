@@ -592,8 +592,9 @@ class SoundboardPage(Gtk.Box):
         if popped:              # pop-out window: nothing but the pads
             sw = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
             self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True, margin_top=8,
-                                    margin_bottom=8, margin_start=8, margin_end=8, max_children_per_line=16, min_children_per_line=1, row_spacing=6,
-                                    column_spacing=6, valign=Gtk.Align.START)
+                                    margin_bottom=8, margin_start=8, margin_end=8, max_children_per_line=16,
+                                    min_children_per_line=1, row_spacing=6, column_spacing=6,
+                                    valign=Gtk.Align.START)
             sw.set_child(self.flow)
             self.append(sw)
             unlock = Gtk.GestureClick(button=3)      # locked window has no header: right-click anywhere unlocks
@@ -664,6 +665,8 @@ class SoundboardPage(Gtk.Box):
                 w.queue_draw()
 
     def _tick(self):
+        if self.popped and self not in self.pages():     # its pop-out window was closed: stop this timer
+            return False
         if self.get_mapped() and (self.board.playing or self._was_playing):
             for w in self.waves:
                 w.queue_draw()
@@ -1231,15 +1234,20 @@ class Instruments:
 
 # =========================================================================== how to run the mixer
 def installed():
-    """True for the packaged install (/usr/share/audio-mixer with an `audio-mixer` command)."""
-    return os.path.dirname(os.path.abspath(__file__)) == "/usr/share/audio-mixer" \
+    """True when installed with an `audio-mixer` command: the AUR package (/usr/share/audio-mixer) or the
+    release's install.sh (~/.local/share/audio-mixer)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    return here in ("/usr/share/audio-mixer", os.path.join(GLib.get_user_data_dir(), "audio-mixer")) \
         and bool(shutil.which("audio-mixer"))
 
 
 def run_command():
     """The command that starts this mixer, for showing to the user and for autostart."""
     if installed():
-        return "audio-mixer"
+        path = shutil.which("audio-mixer")
+        if path.startswith("/usr/"):
+            return "audio-mixer"
+        return '"{}"'.format(path)        # ~/.local/bin isn't on PATH in every login session
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio_mixer.py")
     return 'python3 "{}"'.format(script.replace("\\", "\\\\").replace('"', '\\"'))
 

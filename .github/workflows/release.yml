@@ -1,0 +1,66 @@
+name: Release
+
+# Change VERSION and push: this builds and tests the Linux download and the Windows .exe, then publishes
+# both as release v<VERSION> (GitHub creates the tag). Nothing is published if that release already exists.
+on:
+  push:
+    branches: ["main"]
+    paths: ["VERSION"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 pulseaudio-utils gcc
+          /usr/bin/python3 -m pip install --break-system-packages numpy==2.2.6 miniaudio==1.61
+      - name: Unit tests
+        run: AMXSB_NO_AUDIO=1 /usr/bin/python3 -m unittest discover -s tests -v
+      - name: Build the Linux download
+        run: sh packaging/linux/make-tarball.sh
+      - name: Install it and run it
+        run: |
+          mkdir -p "$RUNNER_TEMP/try" && tar -C "$RUNNER_TEMP/try" -xzf dist/audio-mixer-*-linux.tar.gz
+          sh "$RUNNER_TEMP"/try/audio-mixer-*-linux/install.sh
+          test -x "$HOME/.local/bin/audio-mixer"
+          test -f "$HOME/.local/share/audio-mixer/fx/amx_fx.so"
+          "$HOME/.local/bin/audio-mixer" ctl > "$RUNNER_TEMP/ctl.txt"
+          grep -q "usage" "$RUNNER_TEMP/ctl.txt"
+          sh "$RUNNER_TEMP"/try/audio-mixer-*-linux/uninstall.sh
+          test ! -e "$HOME/.local/bin/audio-mixer"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audio-mixer-linux
+          path: dist/audio-mixer-*-linux.tar.gz
+
+  windows:
+    uses: ./.github/workflows/windows.yml
+
+  publish:
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=$(tr -d ' \n' < VERSION)
+          if gh release view "v$v" >/dev/null 2>&1; then
+            echo "Release v$v already exists; change VERSION to publish a new one."
+            exit 0
+          fi
+          ls -la assets
+          gh release create "v$v" assets/audio-mixer-*-linux.tar.gz assets/AudioMixerSoundboard.exe \
+            --target "$GITHUB_SHA" --title "Audio Mixer $v" --notes-file RELEASE_NOTES.md
