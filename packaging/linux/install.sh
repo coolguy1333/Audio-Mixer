@@ -37,7 +37,7 @@ fi
 echo "Installing to $dest"
 rm -rf "$dest"
 mkdir -p "$dest/fx" "$bin" "$data/applications" "$data/icons/hicolor/scalable/apps"
-cp "$here"/audio_mixer.py "$here"/amx_effects.py "$here"/amx_extras.py "$here"/amx_sounds.py "$dest/"
+cp "$here"/audio_mixer.py "$here"/amx_*.py "$dest/"
 cp "$here/fx/amx_fx.c" "$dest/fx/"
 cp -r "$here/web" "$here/assets" "$here/opendeck" "$dest/"
 cp "$here/README.md" "$here/LICENSE" "$dest/" 2>/dev/null || true

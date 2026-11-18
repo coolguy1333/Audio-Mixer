@@ -12,14 +12,21 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gcc
+          sudo apt-get install -y --no-install-recommends python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 pulseaudio-utils gcc
           pipx install ruff
           /usr/bin/python3 -m pip install --break-system-packages numpy==2.2.6 miniaudio==1.61
       - name: Lint (errors only)
         run: ruff check --select F,E9,PLE --line-length 200 .
       - name: Byte-compile
-        run: python3 -m py_compile audio_mixer.py amx_effects.py amx_extras.py amx_sounds.py amx_games.py windows/*.py
+        run: python3 -m py_compile audio_mixer.py amx_*.py windows/*.py
       - name: Build the effects plugin
         run: gcc -O2 -Wall -fPIC -shared -o fx/amx_fx.so fx/amx_fx.c -DAMX_NO_RNNOISE -lm
       - name: Unit tests
         run: AMXSB_NO_AUDIO=1 /usr/bin/python3 -m unittest discover -s tests -v
+      - name: Linux download installs and starts
+        run: |
+          sh packaging/linux/make-tarball.sh
+          mkdir -p "$RUNNER_TEMP/try" && tar -C "$RUNNER_TEMP/try" -xzf dist/audio-mixer-*-linux.tar.gz
+          sh "$RUNNER_TEMP"/try/audio-mixer-*-linux/install.sh
+          "$HOME/.local/bin/audio-mixer" ctl > "$RUNNER_TEMP/ctl.txt"
+          grep -q "usage" "$RUNNER_TEMP/ctl.txt"
