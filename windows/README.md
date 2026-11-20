@@ -3,6 +3,7 @@
 A soundboard for Windows 10 and 11, built from the Linux Audio Mixer's soundboard. The full mixer (channels, mixes, per-app routing, effects) needs PipeWire and stays Linux-only.
 
 - **Pads** with waveforms. Click to play; click again to layer another copy. Use ⋯ to trim on the waveform and set volume, colour and a hotkey. Drag pads to reorder them.
+- **Pop-out:** **⧉ Pop out** opens just the pads in a small window that can shrink to a strip and stay on top (📌) while you game. Click a pad to play it, right-click to stop it, Esc stops everything. The tray menu shows or hides it, and it remembers its size and place.
 - **Plays on any output device.** Choose VB-Cable to reach Discord, OBS or a game, and add a **monitor** device (your headphones) so you hear the sounds yourself.
 - **Mic passthrough** mixes your microphone into the same output, so the people you talk to hear your voice and the sounds on one virtual mic.
 - **Global hotkeys** work while a game has focus. A sound's hotkey toggles it, and there's an optional Stop all hotkey.

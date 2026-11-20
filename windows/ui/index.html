@@ -95,6 +95,28 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-bottom-wi
   header { padding: 12px 12px 6px; } main { padding: 0 12px 16px; } header h1 { font-size: 21px; }
   .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
+@media (max-width: 420px) {
+  header { padding: 8px 8px 4px; gap: 6px; } main { padding: 0 8px 12px; } header h1 { font-size: 18px; }
+  header button { padding: 5px 8px; } .bar { grid-template-columns: 1fr; padding: 10px; } .hint { display: none; }
+  .grid { gap: 6px; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+}
+/* pop-out (?mini=1): just the pads, as small as the window allows */
+.minibar { display: none; }
+body.mini header, body.mini .bar, body.mini .hint { display: none; }
+body.mini .minibar { display: flex; gap: 4px; align-items: center; padding: 4px 6px; position: sticky; top: 0;
+  background: var(--bg); z-index: 5; }
+body.mini .minibar button { width: 26px; height: 24px; padding: 0; font-size: 12px; display: inline-grid; place-items: center; }
+body.mini .minibar button[hidden] { display: none; }
+body.mini .minibar button.on { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+body.mini main { padding: 0 6px 6px; }
+body.mini .alert { padding: 5px 8px; font-size: 12px; margin-bottom: 6px; }
+body.mini .grid { gap: 6px; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+body.mini .pad { padding: 6px 7px 6px; gap: 4px; }
+body.mini .pad .name { font-size: 12.5px; min-width: 0; }
+body.mini .pad .badge, body.mini .pad button, body.mini .pad .ctl { display: none; }
+body.mini .pad canvas { height: 26px; border-radius: 4px; }
+body.mini .empty { padding: 16px 8px; border-width: 1px; }
+body.mini .toast { bottom: 8px; padding: 6px 12px; font-size: 12.5px; }
 </style>
 </head>
 <body>
@@ -104,9 +126,16 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-bottom-wi
   <button class="danger" id="stopall" title="Stop every sound">Stop all</button>
   <button id="online" title="Search MyInstants, Freesound, Openverse and Wikimedia Commons, or paste a link">Find sounds online</button>
   <button class="primary" id="add">+ Add sounds</button>
+  <button id="popout" title="Open just the pads in their own small window, which can stay on top">⧉ Pop out</button>
   <button class="icon flat" id="settings" title="Settings" aria-label="Settings">⚙</button>
   <input type="file" id="file" accept="audio/*,.mp3,.wav,.ogg,.oga,.opus,.flac,.m4a,.aac,.webm,.wma" multiple hidden>
 </header>
+<div class="minibar">
+  <button class="danger" id="mStop" title="Stop all sounds (Esc)" aria-label="Stop all sounds">■</button>
+  <button id="mTop" title="Always on top" aria-label="Always on top" hidden>📌</button>
+  <span class="grow"></span>
+  <button class="flat" id="mMain" title="Open the full soundboard window" aria-label="Open the full window" hidden>⤢</button>
+</div>
 <main>
   <div id="alerts"></div>
   <div class="bar">
@@ -212,6 +241,9 @@ const COLORS = [null, "#35aef5", "#46c46e", "#f5d142", "#f5a524", "#e5484d", "#f
 let S = null;                  // last /api/state
 const peaks = {};              // id -> array
 let editing = null;            // sound id in the editor
+const MINI = new URLSearchParams(location.search).has("mini");   // the pop-out window: pads only
+if (MINI) { document.body.classList.add("mini"); document.title = "Soundboard"; }
+const PY = () => window.pywebview && window.pywebview.api;
 
 async function api(path, body, raw) {
   const opt = { headers: { "X-Token": TOKEN } };
@@ -273,7 +305,7 @@ function recordHotkey(btn, done) {
 // ---------------------------------------------------------------- state + pads
 async function refresh() {
   try { S = await api("state"); } catch (e) { return; }
-  renderAlerts(); renderBar(); renderGrid();
+  renderAlerts(); if (!MINI) renderBar(); else renderMini(); renderGrid();
   if (editing) drawEdit();
 }
 function renderAlerts() {
@@ -323,7 +355,8 @@ function renderGrid() {
     if (!S.sounds.length) {
       g.append(el("div", { class: "empty", style: "grid-column:1/-1" },
         el("div", { style: "font-size:17px;color:var(--text);margin-bottom:6px", text: "No sounds yet" }),
-        el("div", { text: "Drop audio files here, use “+ Add sounds”, or “Find sounds online”." })));
+        el("div", { text: MINI ? "Drop audio files here, or add them in the full window." :
+                              "Drop audio files here, use “+ Add sounds”, or “Find sounds online”." })));
     }
     for (const s of S.sounds) g.append(pad(s));
   }
@@ -334,9 +367,10 @@ function renderGrid() {
   }
 }
 function pad(s) {
-  const cv = el("canvas", { height: 44 });
-  const card = el("div", { class: "pad", "data-id": s.id, draggable: "true", style: s.color ? `--pc:${s.color}` : "",
-      title: "Click to play" + (s.hotkey ? " · hotkey " + hotkeyLabel(s.hotkey) : "") },
+  const cv = el("canvas", { height: MINI ? 26 : 44 });
+  const card = el("div", { class: "pad", "data-id": s.id, draggable: MINI ? "false" : "true", style: s.color ? `--pc:${s.color}` : "",
+      title: MINI ? `${s.name} · ${s.id}\nClick to play (again to layer), right-click to stop` + (s.hotkey ? "\nHotkey " + hotkeyLabel(s.hotkey) : "")
+                  : "Click to play" + (s.hotkey ? " · hotkey " + hotkeyLabel(s.hotkey) : "") },
     el("div", { class: "row", style: "gap:6px" },
       el("div", { class: "name grow", text: s.name }),
       s.hotkey ? el("span", { class: "badge", text: hotkeyLabel(s.hotkey) }) : null,
@@ -348,7 +382,7 @@ function pad(s) {
       el("button", { title: "Play (again to layer)", "aria-label": "Play " + s.name, onclick: (e) => { e.stopPropagation(); play(s.id); } }, document.createTextNode("▶")),
       el("button", { title: "Stop", "aria-label": "Stop " + s.name, onclick: (e) => { e.stopPropagation(); api("stop/" + s.id, {}); } }, document.createTextNode("■"))));
   card.addEventListener("click", () => play(s.id));
-  card.addEventListener("contextmenu", (e) => { e.preventDefault(); openEdit(s.id); });
+  card.addEventListener("contextmenu", (e) => { e.preventDefault(); if (MINI) api("stop/" + s.id, {}).then(refresh); else openEdit(s.id); });
   card.addEventListener("dragstart", (e) => { e.dataTransfer.setData("application/x-amx-pad", s.id); card.classList.add("dragging"); });
   card.addEventListener("dragend", () => card.classList.remove("dragging"));
   card.addEventListener("dragover", (e) => { if (e.dataTransfer.types.includes("application/x-amx-pad")) { e.preventDefault(); card.classList.add("dropbefore"); } });
@@ -423,6 +457,31 @@ window.addEventListener("drop", (e) => {
   e.preventDefault(); upload([...e.dataTransfer.files]);
 });
 $("stopall").onclick = () => api("stopall", {}).then(refresh);
+window.addEventListener("keydown", (e) => {          // Esc stops every sound (unless a dialog or the hotkey recorder has it)
+  if (e.key !== "Escape" || e.ctrlKey || e.altKey || e.shiftKey || document.querySelector("dialog[open]")) return;
+  api("stopall", {}).then(refresh);
+});
+
+// ---------------------------------------------------------------- pop-out
+$("popout").onclick = () => {
+  if (PY() && PY().popout) { PY().popout(); return; }
+  const w = window.open(location.pathname + "?mini=1", "amx-soundboard-popout", "popup,width=420,height=300");
+  if (!w) toast("Your browser blocked the pop-out window");
+};
+$("mStop").onclick = () => api("stopall", {}).then(refresh);
+$("mTop").onclick = async () => {
+  const on = !$("mTop").classList.contains("on");
+  $("mTop").classList.toggle("on", on);
+  await PY().popout_on_top(on); refresh();
+};
+$("mMain").onclick = () => { if (PY() && PY().show_main) PY().show_main(); else window.open("/", "_blank"); };
+function renderMini() {
+  const app = !!PY();
+  $("mTop").hidden = !app;               // (a browser can't keep a window on top)
+  $("mTop").classList.toggle("on", !!S.popout_on_top);
+  $("mMain").hidden = false;
+}
+window.addEventListener("pywebviewready", () => { if (S) renderMini(); });
 
 // ---------------------------------------------------------------- dialogs
 for (const b of document.querySelectorAll("[data-close]")) b.addEventListener("click", () => b.closest("dialog").close());

@@ -32,6 +32,7 @@ import sb_server  # noqa: E402
 import sb_tray  # noqa: E402
 
 TITLE = "Audio Mixer Soundboard"
+POPOUT_TITLE = "Soundboard"
 
 
 def _log_to_file(lib_home):
@@ -166,7 +167,10 @@ class Shell:
         app.on_quit = self.quit
         app.on_show = self.show
         app.window = None
-        self.tray = sb_tray.Tray(TITLE, self.show, app.engine.stop_all, self.quit)
+        self.webview = None
+        self.popout = None
+        app.on_popout = self.toggle_popout
+        self.tray = sb_tray.Tray(TITLE, self.show, app.engine.stop_all, self.quit, on_popout=self.toggle_popout)
         app.tray_ok = self.tray.ok
 
     def run(self):
@@ -183,17 +187,15 @@ class Shell:
         finally:
             self.tray.stop()
 
-    def _run_window(self):
-        try:
-            import webview
-        except Exception:
-            return False
-        app = self.app
+    def _api(self):
+        """Python functions the page can call (window.pywebview.api.*), shared by both windows."""
+        shell, app = self, self.app
+        webview = self.webview
 
         class Api:
             def save_export(self_):
-                r = self.window.create_file_dialog(webview.SAVE_DIALOG, save_filename="soundboard.zip",
-                                                   file_types=("Soundboard (*.zip)",))
+                r = shell.window.create_file_dialog(webview.SAVE_DIALOG, save_filename="soundboard.zip",
+                                                    file_types=("Soundboard (*.zip)",))
                 path = r[0] if isinstance(r, (list, tuple)) else r
                 if not path:
                     return {"ok": False}
@@ -204,12 +206,35 @@ class Shell:
                 if sys.platform == "win32":
                     os.startfile(app.lib.home)   # noqa: S606
                 return True
+
+            def popout(self_):
+                shell.open_popout()
+                return True
+
+            def popout_on_top(self_, on):
+                shell.set_on_top(bool(on))
+                return bool(on)
+
+            def show_main(self_):
+                shell.show()
+                return True
+        return Api()
+
+    def _run_window(self):
         try:
-            self.window = webview.create_window(TITLE, self.url, width=1180, height=780, min_size=(560, 420),
-                                                background_color="#1d1d1f", js_api=Api(),
+            import webview
+        except Exception:
+            return False
+        self.webview = webview
+        app = self.app
+        try:
+            self.window = webview.create_window(TITLE, self.url, width=1180, height=780, min_size=(300, 220),
+                                                background_color="#1d1d1f", js_api=self._api(),
                                                 hidden=self.start_hidden and self.tray.ok)
             app.window = self.window
             self.window.events.closing += self._closing
+            if self._pcfg().get("open"):
+                self.open_popout()                   # it was open last time
             # Edge WebView2 only: older engines can't run the page; the browser is better then
             webview.start(gui="edgechromium" if sys.platform == "win32" else None)
             return True
@@ -217,6 +242,71 @@ class Shell:
             traceback.print_exc()                    # no WebView2 runtime, …: fall back to the browser
             self.window = app.window = None
             return False
+
+    # ---- pop-out: just the pads, in a small window that can stay on top (like the Linux mixer's pop-out)
+    def _pcfg(self):
+        return self.app.lib.cfg.setdefault("popout", {})
+
+    def open_popout(self):
+        if self.popout is not None:
+            try:
+                self.popout.show()
+                self.popout.restore()
+            except Exception:
+                pass
+            return
+        if self.webview is None:                     # browser mode: the page opens a popup window itself
+            _open_ui_plain(self.url + "?mini=1")
+            return
+        pc = self._pcfg()
+        kw = {}
+        if isinstance(pc.get("x"), int) and isinstance(pc.get("y"), int) and pc["x"] > -10000 and pc["y"] > -10000:
+            kw = {"x": pc["x"], "y": pc["y"]}
+        w = self.webview.create_window(POPOUT_TITLE, self.url + "?mini=1", width=pc.get("width", 420),
+                                       height=pc.get("height", 300), min_size=(120, 80), on_top=bool(pc.get("on_top")),
+                                       background_color="#1d1d1f", js_api=self._api(), **kw)
+        self.popout = w
+
+        def resized(width, height):
+            if width >= 120 and height >= 80:
+                pc["width"], pc["height"] = int(width), int(height)
+
+        def moved(x, y):
+            pc["x"], pc["y"] = int(x), int(y)
+
+        def closed():
+            if self.popout is w:
+                self.popout = None
+            if not self.quitting:                    # (quitting: keep "open", so it comes back next time)
+                pc["open"] = False
+            self.app.lib.save()
+        w.events.resized += resized
+        w.events.moved += moved
+        w.events.closed += closed
+        pc["open"] = True
+        self.app.lib.save()
+
+    def close_popout(self):
+        if self.popout is not None:
+            try:
+                self.popout.destroy()
+            except Exception:
+                pass
+
+    def toggle_popout(self):
+        if self.popout is not None:
+            self.close_popout()
+        else:
+            self.open_popout()
+
+    def set_on_top(self, on):
+        self._pcfg()["on_top"] = on
+        self.app.lib.save()
+        if self.popout is not None:
+            try:
+                self.popout.on_top = on
+            except Exception:
+                traceback.print_exc()
 
     def _closing(self):
         """Closing the window: hide it to the tray instead, unless quitting or the tray is off/unavailable."""
@@ -242,6 +332,7 @@ class Shell:
     def quit(self):
         self.quitting = True
         self.done.set()
+        self.close_popout()
         if self.window is not None:
             try:
                 self.window.destroy()

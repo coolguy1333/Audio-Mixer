@@ -17,7 +17,7 @@ def icon_path():
 
 
 class Tray:
-    def __init__(self, title, on_show, on_stop_all, on_quit):
+    def __init__(self, title, on_show, on_stop_all, on_quit, on_popout=None):
         self.icon = None
         self.error = None
         if pystray is None:
@@ -29,6 +29,7 @@ class Tray:
             image = Image.new("RGBA", (64, 64), (53, 174, 245, 255))
         menu = pystray.Menu(
             pystray.MenuItem("Show soundboard", lambda _i, _m: on_show(), default=True),
+            pystray.MenuItem("Show / hide pop-out", lambda _i, _m: on_popout(), visible=on_popout is not None),
             pystray.MenuItem("Stop all sounds", lambda _i, _m: on_stop_all()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", lambda _i, _m: on_quit()))
