@@ -54,6 +54,7 @@ class App:
         self.hotkeys = None
         self.on_quit = None
         self.on_show = None
+        self.on_popout = None
         self.tray_ok = False
         self.notice = lib.problem
 
@@ -78,7 +79,7 @@ class App:
                 "placeholders": [p for _n, _f, p in snd.SOURCES],
                 "ffmpeg": bool(sb_library.ffmpeg_path()), "ytdlp": snd.have_ytdlp(),
                 "lan_urls": [f"http://{ip}:{c['port']}/?t={c['token']}" for ip in lan_ips()] if c.get("lan") else [],
-                "data_dir": lib.home}
+                "data_dir": lib.home, "popout_on_top": bool(c.get("popout", {}).get("on_top"))}
 
     def settings(self, d):
         c = self.lib.cfg
@@ -293,6 +294,10 @@ def make_handler(app):
                 if app.on_show:
                     threading.Thread(target=app.on_show, daemon=True).start()
                 return self._send(200, {"ok": True})
+            if p == "popout":                           # tray-less / script: show or hide the pop-out window
+                if app.on_popout:
+                    threading.Thread(target=app.on_popout, daemon=True).start()
+                return self._send(200, {"ok": bool(app.on_popout)})
             if p == "quit":
                 self._send(200, {"ok": True})
                 if app.on_quit:

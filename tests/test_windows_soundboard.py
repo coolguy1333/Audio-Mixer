@@ -318,6 +318,19 @@ class Server(Base):
         time.sleep(0.2)
         self.assertEqual(shown, [1])
 
+    def test_popout(self):
+        self.assertFalse(self.call("/api/popout", {})["ok"])          # no window (browser mode, tests)
+        toggled = []
+        self.app.on_popout = lambda: toggled.append(1)
+        self.assertTrue(self.call("/api/popout", {})["ok"])
+        self.assertIs(self.call("/api/state")["popout_on_top"], False)
+        self.app.lib.cfg["popout"] = {"on_top": True}
+        self.assertIs(self.call("/api/state")["popout_on_top"], True)
+        self.assertIn(b"?mini=1", self.call("/"))
+        import time
+        time.sleep(0.2)
+        self.assertEqual(toggled, [1])
+
     def test_settings_and_quit(self):
         self.call("/api/settings", {"volume": 999, "monitor_volume": 50})
         st = self.call("/api/state")["settings"]
