@@ -228,7 +228,7 @@ class Shell:
         self.webview = webview
         app = self.app
         try:
-            self.window = webview.create_window(TITLE, self.url, width=1180, height=780, min_size=(300, 220),
+            self.window = webview.create_window(TITLE, self.url, width=1180, height=780, min_size=(200, 150),
                                                 background_color="#1d1d1f", js_api=self._api(),
                                                 hidden=self.start_hidden and self.tray.ok)
             app.window = self.window
@@ -245,7 +245,12 @@ class Shell:
 
     # ---- pop-out: just the pads, in a small window that can stay on top (like the Linux mixer's pop-out)
     def _pcfg(self):
-        return self.app.lib.cfg.setdefault("popout", {})
+        pc = self.app.lib.cfg.setdefault("popout", {})
+        if pc.get("v") != 2:            # sizes saved before 2 were inflated by display scaling: start over
+            for k in ("width", "height", "x", "y"):
+                pc.pop(k, None)
+            pc["v"] = 2
+        return pc
 
     def open_popout(self):
         if self.popout is not None:
@@ -262,17 +267,33 @@ class Shell:
         kw = {}
         if isinstance(pc.get("x"), int) and isinstance(pc.get("y"), int) and pc["x"] > -10000 and pc["y"] > -10000:
             kw = {"x": pc["x"], "y": pc["y"]}
-        w = self.webview.create_window(POPOUT_TITLE, self.url + "?mini=1", width=pc.get("width", 420),
-                                       height=pc.get("height", 300), min_size=(120, 80), on_top=bool(pc.get("on_top")),
+        w = self.webview.create_window(POPOUT_TITLE, self.url + "?mini=1", width=pc.get("width", 300),
+                                       height=pc.get("height", 200), min_size=(100, 60), on_top=bool(pc.get("on_top")),
                                        background_color="#1d1d1f", js_api=self._api(), **kw)
         self.popout = w
 
+        def scale():
+            """resized/moved report physical pixels, create_window takes unscaled ones: at 150% display
+            scaling, saving the raw size made the window 1.5x bigger every time it opened."""
+            n = getattr(w, "native", None)
+            for f in (lambda: n.DeviceDpi / 96, lambda: n.scale_factor):
+                try:
+                    v = float(f())
+                    if v > 0:
+                        return v
+                except Exception:
+                    pass
+            return 1.0
+
         def resized(width, height):
-            if width >= 120 and height >= 80:
-                pc["width"], pc["height"] = int(width), int(height)
+            k = scale()
+            width, height = round(width / k), round(height / k)
+            if width >= 100 and height >= 60:
+                pc["width"], pc["height"] = width, height
 
         def moved(x, y):
-            pc["x"], pc["y"] = int(x), int(y)
+            k = scale()
+            pc["x"], pc["y"] = round(x / k), round(y / k)
 
         def closed():
             if self.popout is w:

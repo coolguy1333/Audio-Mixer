@@ -100,6 +100,14 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-bottom-wi
   header button { padding: 5px 8px; } .bar { grid-template-columns: 1fr; padding: 10px; } .hint { display: none; }
   .grid { gap: 6px; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
 }
+header .short { display: none; }
+/* main window made small: one row of icon buttons over compact pads (right-click a pad to edit it) */
+body.compact header { padding: 5px 6px; gap: 4px; flex-wrap: nowrap; }
+body.compact header h1, body.compact .bar, body.compact .hint { display: none; }
+body.compact header .long { display: none; } body.compact header .short { display: inline; }
+body.compact header button { height: 26px; min-width: 28px; padding: 0 6px; font-size: 12.5px; }
+body.compact header button.icon { width: 28px; }
+body.compact header #stopall { margin-right: auto; }
 /* pop-out (?mini=1): just the pads, as small as the window allows */
 .minibar { display: none; }
 body.mini header, body.mini .bar, body.mini .hint { display: none; }
@@ -108,25 +116,26 @@ body.mini .minibar { display: flex; gap: 4px; align-items: center; padding: 4px 
 body.mini .minibar button { width: 26px; height: 24px; padding: 0; font-size: 12px; display: inline-grid; place-items: center; }
 body.mini .minibar button[hidden] { display: none; }
 body.mini .minibar button.on { background: var(--accent2); border-color: var(--accent2); color: #fff; }
-body.mini main { padding: 0 6px 6px; }
-body.mini .alert { padding: 5px 8px; font-size: 12px; margin-bottom: 6px; }
-body.mini .grid { gap: 6px; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
-body.mini .pad { padding: 6px 7px 6px; gap: 4px; }
-body.mini .pad .name { font-size: 12.5px; min-width: 0; }
-body.mini .pad .badge, body.mini .pad button, body.mini .pad .ctl { display: none; }
-body.mini .pad canvas { height: 26px; border-radius: 4px; }
-body.mini .empty { padding: 16px 8px; border-width: 1px; }
-body.mini .toast { bottom: 8px; padding: 6px 12px; font-size: 12.5px; }
+body.mini main, body.compact main { padding: 0 6px 6px; }
+body.mini .alert, body.compact .alert { padding: 5px 8px; font-size: 12px; margin-bottom: 6px; }
+body.mini .grid, body.compact .grid { gap: 6px; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+body.mini .pad, body.compact .pad { padding: 6px 7px 6px; gap: 4px; }
+body.mini .pad .name, body.compact .pad .name { font-size: 12.5px; min-width: 0; }
+body.mini .pad .badge, body.mini .pad button, body.mini .pad .ctl,
+body.compact .pad .badge, body.compact .pad button, body.compact .pad .ctl { display: none; }
+body.mini .pad canvas, body.compact .pad canvas { height: 26px; border-radius: 4px; }
+body.mini .empty, body.compact .empty { padding: 16px 8px; border-width: 1px; }
+body.mini .toast, body.compact .toast { bottom: 8px; padding: 6px 12px; font-size: 12.5px; }
 </style>
 </head>
 <body>
 <div class="drop">Drop audio files to add them</div>
 <header>
   <h1>Soundboard</h1>
-  <button class="danger" id="stopall" title="Stop every sound">Stop all</button>
-  <button id="online" title="Search MyInstants, Freesound, Openverse and Wikimedia Commons, or paste a link">Find sounds online</button>
-  <button class="primary" id="add">+ Add sounds</button>
-  <button id="popout" title="Open just the pads in their own small window, which can stay on top">⧉ Pop out</button>
+  <button class="danger" id="stopall" title="Stop every sound (Esc)"><span class="long">Stop all</span><span class="short">■</span></button>
+  <button id="online" title="Search MyInstants, Freesound, Openverse and Wikimedia Commons, or paste a link"><span class="long">Find sounds online</span><span class="short">🔍</span></button>
+  <button class="primary" id="add" title="Add sound files"><span class="long">+ Add sounds</span><span class="short">+</span></button>
+  <button id="popout" title="Open just the pads in their own small window, which can stay on top"><span class="long">⧉ Pop out</span><span class="short">⧉</span></button>
   <button class="icon flat" id="settings" title="Settings" aria-label="Settings">⚙</button>
   <input type="file" id="file" accept="audio/*,.mp3,.wav,.ogg,.oga,.opus,.flac,.m4a,.aac,.webm,.wma" multiple hidden>
 </header>
@@ -367,9 +376,10 @@ function renderGrid() {
   }
 }
 function pad(s) {
-  const cv = el("canvas", { height: MINI ? 26 : 44 });
+  const small = MINI || document.body.classList.contains("compact");
+  const cv = el("canvas", { height: small ? 26 : 44 });
   const card = el("div", { class: "pad", "data-id": s.id, draggable: MINI ? "false" : "true", style: s.color ? `--pc:${s.color}` : "",
-      title: MINI ? `${s.name} · ${s.id}\nClick to play (again to layer), right-click to stop` + (s.hotkey ? "\nHotkey " + hotkeyLabel(s.hotkey) : "")
+      title: small ? `${s.name} · ${s.id}\nClick to play (again to layer), ${MINI ? "right-click to stop" : "right-click to edit"}` + (s.hotkey ? "\nHotkey " + hotkeyLabel(s.hotkey) : "")
                   : "Click to play" + (s.hotkey ? " · hotkey " + hotkeyLabel(s.hotkey) : "") },
     el("div", { class: "row", style: "gap:6px" },
       el("div", { class: "name grow", text: s.name }),
@@ -657,7 +667,15 @@ $("sFolder").onclick = () => window.pywebview.api.open_folder();
 $("sQuit").onclick = async () => { if (!confirm("Quit the soundboard? Hotkeys stop working until you open it again.")) return; await api("quit", {}); document.body.textContent = "The soundboard has quit. You can close this tab."; };
 
 // ---------------------------------------------------------------- loop
-window.addEventListener("resize", renderAll);
+function setCompact() {
+  const on = !MINI && (innerWidth < 480 || innerHeight < 420);
+  if (on !== document.body.classList.contains("compact")) {
+    document.body.classList.toggle("compact", on);
+    for (const c of document.querySelectorAll(".pad canvas")) c.height = on ? 26 : 44;
+  }
+}
+setCompact();
+window.addEventListener("resize", () => { setCompact(); renderAll(); });
 async function loop() {
   if (!document.hidden) await refresh();
   setTimeout(loop, S && S.sounds.some(s => s.playing.length) ? 120 : 600);
