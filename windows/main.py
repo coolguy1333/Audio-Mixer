@@ -153,6 +153,31 @@ def _open_ui_plain(url):
     webbrowser.open(url)
 
 
+def _fix_min_size(w, size):
+    """WinForms scales a window's MinimumSize for display scaling, and at 150-200% it can get scaled more
+    than once, so the window won't shrink below ~800x1000. Once it's shown, set the minimum in real pixels."""
+    form = getattr(w, "native", None)
+    if form is None or sys.platform != "win32":
+        return
+    try:
+        from System import Action
+        from System.Drawing import Size
+
+        def apply():
+            k = max(1.0, form.DeviceDpi / 96)
+            before = (form.MinimumSize.Width, form.MinimumSize.Height)
+            form.MinimumSize = Size(int(size[0] * k), int(size[1] * k))
+            print(f"min size {w.title!r}: was {before}, now {form.MinimumSize.Width}x{form.MinimumSize.Height}"
+                  f" (dpi {form.DeviceDpi}, window {form.Width}x{form.Height})")
+        form.Invoke(Action(apply))
+    except Exception:
+        traceback.print_exc()
+
+
+MAIN_MIN = (200, 150)
+POPOUT_MIN = (100, 60)
+
+
 class Shell:
     """The app window (pywebview) or the browser, plus the tray icon. With the tray on, closing the window
     hides it and the soundboard keeps running (hotkeys, Stream Deck links); Quit is in the tray menu."""
@@ -228,11 +253,12 @@ class Shell:
         self.webview = webview
         app = self.app
         try:
-            self.window = webview.create_window(TITLE, self.url, width=1180, height=780, min_size=(200, 150),
+            self.window = webview.create_window(TITLE, self.url, width=1180, height=780, min_size=MAIN_MIN,
                                                 background_color="#1d1d1f", js_api=self._api(),
                                                 hidden=self.start_hidden and self.tray.ok)
             app.window = self.window
             self.window.events.closing += self._closing
+            self.window.events.shown += lambda: _fix_min_size(self.window, MAIN_MIN)
             if self._pcfg().get("open"):
                 self.open_popout()                   # it was open last time
             # Edge WebView2 only: older engines can't run the page; the browser is better then
@@ -268,7 +294,7 @@ class Shell:
         if isinstance(pc.get("x"), int) and isinstance(pc.get("y"), int) and pc["x"] > -10000 and pc["y"] > -10000:
             kw = {"x": pc["x"], "y": pc["y"]}
         w = self.webview.create_window(POPOUT_TITLE, self.url + "?mini=1", width=pc.get("width", 300),
-                                       height=pc.get("height", 200), min_size=(100, 60), on_top=bool(pc.get("on_top")),
+                                       height=pc.get("height", 200), min_size=POPOUT_MIN, on_top=bool(pc.get("on_top")),
                                        background_color="#1d1d1f", js_api=self._api(), **kw)
         self.popout = w
 
@@ -304,6 +330,7 @@ class Shell:
         w.events.resized += resized
         w.events.moved += moved
         w.events.closed += closed
+        w.events.shown += lambda: _fix_min_size(w, POPOUT_MIN)
         pc["open"] = True
         self.app.lib.save()
 
