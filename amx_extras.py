@@ -774,11 +774,15 @@ class SoundboardPage(Gtk.Box):
         for s in sounds:
             self.flow.append(self.mini_pad(s) if self.popped else self.pad(s))
 
+    @staticmethod
+    def _mini_tip(s):
+        return (f"{s['name']}  ·  {s['id']}\nClick to play (again to layer), right-click to stop.\n"
+                "Esc stops every sound.")
+
     def mini_pad(self, s):
         """A pop-out pad: name and waveform. Click plays (again to layer); right-click stops it."""
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, css_classes=["cell", "sb-pad"],
-                       tooltip_text=f"{s['name']}  ·  {s['id']}\nClick to play (again to layer), right-click to stop.\n"
-                                    "Esc stops every sound.")
+                       tooltip_text=self._mini_tip(s))
         card.set_size_request(110, -1)
         self.cards[s["id"]] = card
         lbl = Gtk.Label(label=s["name"], xalign=0, ellipsize=3, css_classes=["chname"])
@@ -900,9 +904,15 @@ class SoundboardPage(Gtk.Box):
                     continue
                 if not gone:
                     p.name_labels[s["id"]].set_label(s["name"])
+                    if p.popped:
+                        card.set_tooltip_text(self._mini_tip(s))
                 elif self.board.board["sounds"]:
-                    p.waves = [w for w in p.waves if w.get_ancestor(Gtk.FlowBoxChild) is not card.get_parent()]
-                    p.flow.remove(card.get_parent())
+                    child = card.get_parent()
+                    near = child.get_next_sibling() or child.get_prev_sibling()
+                    if near is not None and child.get_focus_child() is not None:
+                        near.grab_focus()    # else focus falls to the top of the page and it scrolls there
+                    p.waves = [w for w in p.waves if w.get_ancestor(Gtk.FlowBoxChild) is not child]
+                    p.flow.remove(child)
                     del p.cards[s["id"]], p.name_labels[s["id"]]
                 else:
                     p.rebuild()          # the last sound: show the "No sounds yet" hint
