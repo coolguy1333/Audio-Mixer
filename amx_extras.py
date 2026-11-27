@@ -763,6 +763,8 @@ class SoundboardPage(Gtk.Box):
             self.build_routing()
         _clear(self.flow)
         self.waves = []
+        self.name_labels = {}     # sound id -> its pad's name label, to rename without a rebuild
+        self.cards = {}           # sound id -> its pad, to remove one without a rebuild
         sounds = self.board.board["sounds"]
         if not sounds:
             self.flow.append(Gtk.Label(label="No sounds yet." if self.popped else
@@ -778,7 +780,10 @@ class SoundboardPage(Gtk.Box):
                        tooltip_text=f"{s['name']}  ·  {s['id']}\nClick to play (again to layer), right-click to stop.\n"
                                     "Esc stops every sound.")
         card.set_size_request(110, -1)
-        card.append(Gtk.Label(label=s["name"], xalign=0, ellipsize=3, css_classes=["chname"]))
+        self.cards[s["id"]] = card
+        lbl = Gtk.Label(label=s["name"], xalign=0, ellipsize=3, css_classes=["chname"])
+        self.name_labels[s["id"]] = lbl
+        card.append(lbl)
         w = Waveform(self.board, s, height=28)
         self.waves.append(w)
         card.append(w)
@@ -793,8 +798,11 @@ class SoundboardPage(Gtk.Box):
     def pad(self, s):
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, css_classes=["cell", "sb-pad"])
         card.set_size_request(190, -1)
+        self.cards[s["id"]] = card
         head = Gtk.Box(spacing=6)
-        head.append(Gtk.Label(label=s["name"], xalign=0, hexpand=True, ellipsize=3, css_classes=["chname"]))
+        lbl = Gtk.Label(label=s["name"], xalign=0, hexpand=True, ellipsize=3, css_classes=["chname"])
+        self.name_labels[s["id"]] = lbl
+        head.append(lbl)
         head.append(Gtk.Label(label=s["id"], css_classes=["sub", "numeric"], tooltip_text="Sound id"))
         more = Gtk.Button(icon_name="view-more-symbolic", css_classes=["flat", "dimbtn"], tooltip_text="Edit")
         more.connect("clicked", lambda *_: self.edit(s))
@@ -880,7 +888,26 @@ class SoundboardPage(Gtk.Box):
         close.connect("clicked", lambda *_: dlg.close())
         bottom.append(close)
         box.append(bottom)
-        dlg.connect("closed", lambda *_: (GLib.source_remove(t), self.rebuild_all()))
+
+        def closed(*_):
+            GLib.source_remove(t)
+            # Update the pads in place rather than rebuilding them all: a rebuild throws away the pad that has
+            # focus, and the page jumps back to the top.
+            gone = s not in self.board.board["sounds"]
+            for p in self.pages():
+                card = p.cards.get(s["id"])
+                if not card:
+                    continue
+                if not gone:
+                    p.name_labels[s["id"]].set_label(s["name"])
+                elif self.board.board["sounds"]:
+                    p.waves = [w for w in p.waves if w.get_ancestor(Gtk.FlowBoxChild) is not card.get_parent()]
+                    p.flow.remove(card.get_parent())
+                    del p.cards[s["id"]], p.name_labels[s["id"]]
+                else:
+                    p.rebuild()          # the last sound: show the "No sounds yet" hint
+            self.redraw_all()
+        dlg.connect("closed", closed)
         dlg.present(self.win)
         if not self.board.duration(s):
             self.board.preload([s], lambda _i: (wave.queue_draw(), upd_info()))
