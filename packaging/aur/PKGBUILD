@@ -6,7 +6,7 @@ pkgrel=1
 pkgdesc="Wave Link style software audio mixer for PipeWire with a virtual Stream Deck, effects and soundboard"
 arch=('x86_64' 'aarch64')
 url="https://github.com/coolguy1333/Audio-Mixer"
-license=('MIT')
+license=('PolyForm-Noncommercial-1.0.0')
 depends=(
   'python'
   'python-gobject'

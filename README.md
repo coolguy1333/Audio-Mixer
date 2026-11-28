@@ -172,4 +172,4 @@ The tests need no GTK, sound server or network. CI (`.github/workflows/ci.yml`) 
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+PolyForm Noncommercial 1.0.0, see [LICENSE](LICENSE). Free for personal, educational and other noncommercial use. Selling it or using it for profit requires written permission from Lawson Fingland (lawsonfingland@gmail.com).

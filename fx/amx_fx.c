@@ -1175,7 +1175,7 @@ static void build(void) {
         d->Properties = 4; /* HARD_RT_CAPABLE */
         d->Name = f->name;
         d->Maker = "Audio Mixer";
-        d->Copyright = "MIT";
+        d->Copyright = "PolyForm-Noncommercial-1.0.0";
         d->PortCount = 4 + f->nctl;
         d->PortDescriptors = PD[k];
         d->PortNames = PN[k];
